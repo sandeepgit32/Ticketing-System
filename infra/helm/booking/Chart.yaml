@@ -1,0 +1,4 @@
+apiVersion: v2
+name: booking
+description: Booking service chart
+version: 0.1.0
