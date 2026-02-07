@@ -17,7 +17,7 @@ SEATS_PER_ROW = int(os.getenv('SEATS_PER_ROW', '50'))
 RESERVATION_TTL_SECONDS = int(os.getenv('RESERVATION_TTL_SECONDS', '600'))
 
 # MySQL Configuration
-MYSQL_HOST = os.getenv('MYSQL_HOST', 'mysql')
+MYSQL_HOST = os.getenv('MYSQL_HOST', 'database')
 MYSQL_PORT = int(os.getenv('MYSQL_PORT', '3306'))
 MYSQL_USER = os.getenv('MYSQL_USER', 'ticketuser')
 MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD', 'ticketpass')
@@ -42,27 +42,6 @@ class ReserveRequest(BaseModel):
 def get_db_connection():
     """Get a connection from the pool"""
     return db_pool.get_connection()
-
-
-def init_mysql():
-    """Initialize MySQL tables"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Events table (simplified)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS events (
-            event_id VARCHAR(36) PRIMARY KEY,
-            name VARCHAR(255) NOT NULL,
-            venue VARCHAR(255),
-            start_time TIMESTAMP,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    
-    conn.commit()
-    cursor.close()
-    conn.close()
 
 
 @app.on_event('startup')
@@ -93,15 +72,14 @@ async def startup_event():
                 password=MYSQL_PASSWORD,
                 database=MYSQL_DATABASE
             )
-            init_mysql()
-            print("Connected to MySQL and initialized database")
+            print("Connected to database")
             break
         except Exception as e:
             if i < max_retries - 1:
-                print(f"Waiting for MySQL... ({i+1}/{max_retries})")
+                print(f"Waiting for database... ({i+1}/{max_retries})")
                 sync_time.sleep(2)
             else:
-                print(f"Warning: Could not connect to MySQL: {e}")
+                print(f"Warning: Could not connect to database: {e}")
 
 
 @app.get('/events/{event_id}')

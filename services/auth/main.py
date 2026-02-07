@@ -15,7 +15,7 @@ SECRET_KEY = os.getenv('JWT_SECRET_KEY', 'your-secret-key-change-in-production')
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv('ACCESS_TOKEN_EXPIRE_MINUTES', '60'))
 
-MYSQL_HOST = os.getenv('MYSQL_HOST', 'mysql')
+MYSQL_HOST = os.getenv('MYSQL_HOST', 'database')
 MYSQL_PORT = int(os.getenv('MYSQL_PORT', '3306'))
 MYSQL_USER = os.getenv('MYSQL_USER', 'ticketuser')
 MYSQL_PASSWORD = os.getenv('MYSQL_PASSWORD', 'ticketpass')
@@ -65,28 +65,6 @@ def get_db_connection():
     return db_pool.get_connection()
 
 
-def init_db():
-    """Initialize database tables"""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            user_id VARCHAR(36) PRIMARY KEY,
-            email VARCHAR(255) UNIQUE NOT NULL,
-            password_hash VARCHAR(255) NOT NULL,
-            full_name VARCHAR(255) NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            INDEX idx_email (email)
-        )
-    """)
-    
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-
 @app.on_event('startup')
 async def startup_event():
     global db_pool
@@ -104,15 +82,14 @@ async def startup_event():
                 password=MYSQL_PASSWORD,
                 database=MYSQL_DATABASE
             )
-            init_db()
-            print("Connected to MySQL and initialized database")
+            print("Connected to database")
             break
         except Exception as e:
             if i < max_retries - 1:
-                print(f"Waiting for MySQL... ({i+1}/{max_retries})")
+                print(f"Waiting for database... ({i+1}/{max_retries})")
                 time.sleep(2)
             else:
-                raise Exception(f"Could not connect to MySQL: {e}")
+                raise Exception(f"Could not connect to database: {e}")
 
 
 @app.on_event('shutdown')

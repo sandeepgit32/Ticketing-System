@@ -1,7 +1,7 @@
 version: '3.8'
 services:
-  mysql:
-    image: mysql:8.0
+  database:
+    build: ./services/database
     environment:
       - MYSQL_ROOT_PASSWORD=rootpass
       - MYSQL_DATABASE=ticketing
@@ -26,10 +26,10 @@ services:
   auth:
     build: ./services/auth
     depends_on:
-      mysql:
+      database:
         condition: service_healthy
     environment:
-      - MYSQL_HOST=mysql
+      - MYSQL_HOST=database
       - MYSQL_PORT=3306
       - MYSQL_USER=ticketuser
       - MYSQL_PASSWORD=ticketpass
@@ -42,12 +42,12 @@ services:
   booking-status:
     build: ./services/booking-status
     depends_on:
-      mysql:
+      database:
         condition: service_healthy
       auth:
         condition: service_started
     environment:
-      - MYSQL_HOST=mysql
+      - MYSQL_HOST=database
       - MYSQL_PORT=3306
       - MYSQL_USER=ticketuser
       - MYSQL_PASSWORD=ticketpass
@@ -59,13 +59,13 @@ services:
   booking:
     build: ./services/booking
     depends_on:
-      mysql:
+      database:
         condition: service_healthy
       redis:
         condition: service_started
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - MYSQL_HOST=mysql
+      - MYSQL_HOST=database
       - MYSQL_PORT=3306
       - MYSQL_USER=ticketuser
       - MYSQL_PASSWORD=ticketpass
