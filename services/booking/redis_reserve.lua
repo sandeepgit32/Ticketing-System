@@ -1,3 +1,33 @@
+--[[
+Redis Lua script used by the booking service to atomically reserve a
+contiguous block of seats in a single row for an event.  Executed with
+EVAL/EVALSHA so all operations run inside Redis, avoiding races and the
+need for external locking.
+
+Inputs:
+  KEYS[1]  - seats:{event_id}:row:{row_id}:bitmap  (string bitmap)
+  ARGV[1]  - num_seats (number of contiguous seats requested)
+  ARGV[2]  - reservation_id (unique identifier for the reservation)
+  ARGV[3]  - event_id
+  ARGV[4]  - row_id
+  ARGV[5]  - user_id
+  ARGV[6]  - amount_cents
+  ARGV[7]  - ttl_seconds (how long the reservation key should live)
+  ARGV[8]  - expiry_epoch_seconds (when the reservation expires)
+  ARGV[9]  - seats_per_row (length of the bitmap string)
+
+Behavior:
+  * Loads or initializes the bitmap, searches for a run of zeroes of the
+    requested length, picks a random candidate for fairness, flips those
+    bits to ones and stores the updated bitmap.
+  * Constructs a JSON array of the reserved seat coordinates.
+  * Creates a hash under ``reservation:<id>`` with fields for event,
+    seats, status, user, amount and expiry, sets an expire, and adds the
+    expiry to a sorted set for cleanup.
+  * Returns the reservation id, seats JSON, and expiry time or an error
+    string ``NO_BLOCK`` if no suitable block was available.
+--]]
+
 -- Redis Lua script: reserve contiguous seats in a single row
 -- KEYS[1] = seats:{event_id}:row:{row_id}:bitmap
 -- ARGV[1] = num_seats

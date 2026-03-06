@@ -1,0 +1,33 @@
+venues:
+  Central Park Arena:
+    rows: [A, B, C, D, E, F, G, H]
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+  Convention Center Hall A:
+    rows: [A, B, C, D, E]
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+  Grand Theater:
+    rows: [A, B, C, D, E, F, G, H]
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+  Sports Stadium:
+    rows: [A, B, C, D, E, F, G, H]
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+  Symphony Hall:
+    rows: [A, B, C, D, E, F]
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+  Laugh Factory:
+    rows: [A, B, C, D, E]
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+  Metro Arena:
+    rows: [A, B, C, D, E, F]
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+
+  Waterfront Plaza:
+    rows: [A, B, C, D, E]
+    columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
