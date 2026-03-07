@@ -1,13 +1,17 @@
 import os
 from datetime import datetime, timezone
-from typing import List, Optional
 
 import httpx
 import mysql.connector
-from fastapi import Depends, FastAPI, HTTPException, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from flask import Flask, jsonify, request, abort
+from flask_cors import CORS
 from mysql.connector import pooling
-from pydantic import BaseModel
+
+# The container starts with `uvicorn main:app` from the service directory,
+# loading `main` as a top‑level module. Relative imports would fail in that
+# environment, so import schemas as a plain module name; the working directory
+# (`/app`) is on sys.path inside the container.
+from schemas import BookingDetails, UserBookingsResponse
 
 # Configuration
 MYSQL_HOST = os.getenv("MYSQL_HOST", "database")
@@ -17,38 +21,34 @@ MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "ticketpass")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "ticketing")
 AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth:8000")
 
-app = FastAPI(title="Booking Status Service")
-security = HTTPBearer()
+app = Flask(__name__)
+CORS(app, origins="*", supports_credentials=True)
 db_pool = None
 
 
-class BookingDetails(BaseModel):
-    booking_id: str
-    event_id: str
-    user_id: str
-    status: str  # reserved, confirmed, expired, cancelled
-    seats: List[dict]
-    payment_status: str
-    total_amount: Optional[float] = None
-    created_at: str
-    updated_at: str
-    expires_at: Optional[str] = None
-
-
-class UserBookingsResponse(BaseModel):
-    bookings: List[BookingDetails]
-    total: int
-
-
 def get_db_connection():
-    """Get a connection from the pool"""
+    """
+    Get a MySQL connection from the shared pool.
+
+    The pool is initialized during the first request by `startup_event`. If
+    the pool has not yet been created this will raise an exception.
+
+    Returns:
+        mysql.connector.connection.MySQLConnection: usable connection object.
+    """
     return db_pool.get_connection()
 
 
-@app.on_event("startup")
-async def startup_event():
+@app.before_first_request
+def startup_event():
+    """
+    Create a connection pool when the app handles its first HTTP request.
+
+    This helper retries up to 30 times waiting for the database host to be
+    reachable; it is useful when the service and database come up simultaneously
+    in Docker. Failure after all retries will abort startup with an exception.
+    """
     global db_pool
-    # Wait for MySQL to be ready
     import time
 
     max_retries = 30
@@ -70,35 +70,57 @@ async def startup_event():
                 print(f"Waiting for database... ({i + 1}/{max_retries})")
                 time.sleep(2)
             else:
-                raise Exception(f"Could not connect to database: {e}")
+                raise
 
 
-async def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verify JWT token with auth service"""
+def verify_token():
+    """
+    Extract the bearer JWT from the `Authorization` header and validate it.
+
+    The token is forwarded to the auth microservice's `/verify` endpoint.
+    If the header is missing or malformed the request aborts with 401. Network
+    errors produce a 503, and a non‑200 response from auth results in 401.
+
+    Returns:
+        dict: The JSON payload returned by auth (contains `user_id`, etc.).
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        abort(401, description="Missing or invalid Authorization header")
+
+    token = auth_header.split(None, 1)[1]
+
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{AUTH_SERVICE_URL}/verify",
-                headers={"Authorization": f"Bearer {credentials.credentials}"},
-            )
-            if response.status_code != 200:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Invalid or expired token",
-                )
-            return response.json()
-    except httpx.RequestError:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Auth service unavailable",
+        response = httpx.post(
+            f"{AUTH_SERVICE_URL}/verify",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5.0,
         )
+    except httpx.RequestError:
+        abort(503, description="Auth service unavailable")
+
+    if response.status_code != 200:
+        abort(401, description="Invalid or expired token")
+
+    return response.json()
 
 
-@app.get("/bookings/{booking_id}", response_model=BookingDetails)
-async def get_booking_details(
-    booking_id: str, current_user: dict = Depends(verify_token)
-):
-    """Get booking details by ID"""
+@app.route("/bookings/<booking_id>", methods=["GET"])
+def get_booking_details(booking_id: str):
+    """
+    Retrieve a single booking record and ensure the caller owns it.
+
+    Args:
+        booking_id (str): UUID of the booking to fetch.
+
+    Returns:
+        flask.Response: JSON-serialized booking details.
+
+    The endpoint relies on `verify_token()` to authenticate. If the booking
+    does not exist a 404 error is returned. If the authenticated user does not
+    match the booking's `user_id`, a 403 is raised.
+    """
+    current_user = verify_token()
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
@@ -112,19 +134,15 @@ async def get_booking_details(
         booking = cursor.fetchone()
 
         if not booking:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found"
-            )
+            abort(404, description="Booking not found")
 
         # Check if user has access to this booking
         if booking["user_id"] != current_user.get("user_id"):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="Access denied"
-            )
+            abort(403, description="Access denied")
 
         import json
 
-        return BookingDetails(
+        model = BookingDetails(
             booking_id=booking["booking_id"],
             event_id=booking["event_id"],
             user_id=booking["user_id"],
@@ -142,16 +160,27 @@ async def get_booking_details(
             if booking["expires_at"]
             else None,
         )
+        return jsonify(model.dict())
     finally:
         cursor.close()
         conn.close()
 
 
-@app.get("/user/bookings", response_model=UserBookingsResponse)
-async def get_user_bookings(
-    current_user: dict = Depends(verify_token), limit: int = 50, offset: int = 0
-):
-    """Get all bookings for the current user"""
+@app.route("/user/bookings", methods=["GET"])
+def get_user_bookings():
+    """
+    Return a paginated list of bookings belonging to the authenticated user.
+
+    Query parameters:
+      - `limit` (int, default 50)
+      - `offset` (int, default 0)
+
+    The token is validated via `verify_token`. Results include a `total`
+    count and a `bookings` list.
+    """
+    current_user = verify_token()
+    limit = int(request.args.get("limit", 50))
+    offset = int(request.args.get("offset", 0))
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
@@ -201,19 +230,22 @@ async def get_user_bookings(
                 )
             )
 
-        return UserBookingsResponse(bookings=booking_list, total=total)
+        response_model = UserBookingsResponse(bookings=booking_list, total=total)
+        return jsonify(response_model.dict())
     finally:
         cursor.close()
         conn.close()
 
 
-@app.get("/health")
-async def health():
-    """Health check endpoint"""
-    return {"status": "healthy"}
+@app.route("/health", methods=["GET"])
+def health():
+    """
+    Simple health check used by orchestration systems.
+
+    Returns 200 with `{"status":"healthy"}` when the service is running.
+    """
+    return jsonify({"status": "healthy"})
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    app.run(host="0.0.0.0", port=8000)
