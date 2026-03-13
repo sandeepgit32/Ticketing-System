@@ -79,7 +79,7 @@ def verify_token():
 
     The token is forwarded to the auth microservice's `/verify` endpoint.
     If the header is missing or malformed the request aborts with 401. Network
-    errors produce a 503, and a non‑200 response from auth results in 401.
+    errors produce a 503, and a non-200 response from auth results in 401.
 
     Returns:
         dict: The JSON payload returned by auth (contains `user_id`, etc.).

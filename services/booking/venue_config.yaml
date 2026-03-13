@@ -2,32 +2,91 @@ venues:
   Central Park Arena:
     rows: [A, B, C, D, E, F, G, H]
     columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    seat_price: 
+      A: 1000
+      B: 1000
+      C: 1000
+      D: 800
+      E: 800
+      F: 800
+      G: 700
+      H: 700
 
   Convention Center Hall A:
     rows: [A, B, C, D, E]
     columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    seat_price: 
+      A: 1200
+      B: 1200
+      C: 1000
+      D: 1000
+      E: 800
 
   Grand Theater:
     rows: [A, B, C, D, E, F, G, H]
     columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    seat_price: 
+      A: 1500
+      B: 1500
+      C: 1200
+      D: 1200
+      E: 1000
+      F: 1000
+      G: 800
+      H: 800
 
   Sports Stadium:
     rows: [A, B, C, D, E, F, G, H]
     columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    seat_price: 
+      A: 2000
+      B: 2000
+      C: 1500
+      D: 1500
+      E: 1200
+      F: 1200
+      G: 1000
+      H: 1000
 
   Symphony Hall:
     rows: [A, B, C, D, E, F]
     columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    seat_price: 
+      A: 1800
+      B: 1800
+      C: 1500
+      D: 1500
+      E: 1200
+      F: 1200
 
   Laugh Factory:
     rows: [A, B, C, D, E]
     columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    seat_price: 
+      A: 800
+      B: 800
+      C: 600
+      D: 600
+      E: 400
 
   Metro Arena:
     rows: [A, B, C, D, E, F]
     columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    seat_price: 
+      A: 1300
+      B: 1300
+      C: 1000
+      D: 1000
+      E: 800
+      F: 800
 
   Waterfront Plaza:
     rows: [A, B, C, D, E]
     columns: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+    seat_price: 
+      A: 1100
+      B: 1100
+      C: 900
+      D: 900
+      E: 700
 

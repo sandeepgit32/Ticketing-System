@@ -16,6 +16,8 @@ CREATE TABLE IF NOT EXISTS events (
     event_id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     venue VARCHAR(255),
+    seat_availability_map JSON,
+    seat_price_map JSON,
     start_time TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -39,13 +41,13 @@ CREATE TABLE IF NOT EXISTS bookings (
 );
 
 -- Insert sample events
-INSERT INTO events (event_id, name, venue, start_time) VALUES
-    ('event-001', 'Summer Music Festival 2026', 'Central Park Arena', '2026-07-15 19:00:00'),
-    ('event-002', 'Tech Conference 2026', 'Convention Center Hall A', '2026-08-20 09:00:00'),
-    ('event-003', 'Broadway: The Phantom Returns', 'Grand Theater', '2026-09-10 20:00:00'),
-    ('event-004', 'NBA Finals Game 5', 'Sports Stadium', '2026-06-18 20:30:00'),
-    ('event-005', 'Classical Orchestra Evening', 'Symphony Hall', '2026-10-05 19:30:00'),
-    ('event-006', 'Comedy Night Special', 'Laugh Factory', '2026-08-08 21:00:00'),
-    ('event-007', 'Rock Legends Reunion Tour', 'Metro Arena', '2026-11-12 20:00:00'),
-    ('event-008', 'International Food Festival', 'Waterfront Plaza', '2026-09-25 12:00:00')
-ON DUPLICATE KEY UPDATE event_id=event_id;
+-- INSERT INTO events (event_id, name, venue, start_time) VALUES
+--     ('event-001', 'Summer Music Festival 2026', 'Central Park Arena', '2026-07-15 19:00:00'),
+--     ('event-002', 'Tech Conference 2026', 'Convention Center Hall A', '2026-08-20 09:00:00'),
+--     ('event-003', 'Broadway: The Phantom Returns', 'Grand Theater', '2026-09-10 20:00:00'),
+--     ('event-004', 'NBA Finals Game 5', 'Sports Stadium', '2026-06-18 20:30:00'),
+--     ('event-005', 'Classical Orchestra Evening', 'Symphony Hall', '2026-10-05 19:30:00'),
+--     ('event-006', 'Comedy Night Special', 'Laugh Factory', '2026-08-08 21:00:00'),
+--     ('event-007', 'Rock Legends Reunion Tour', 'Metro Arena', '2026-11-12 20:00:00'),
+--     ('event-008', 'International Food Festival', 'Waterfront Plaza', '2026-09-25 12:00:00')
+-- ON DUPLICATE KEY UPDATE event_id=event_id;
