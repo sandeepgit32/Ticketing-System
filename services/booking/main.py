@@ -1,28 +1,47 @@
-import os
-import uuid
-import time
 import json
-from datetime import datetime, timezone, timedelta
-from typing import Optional, List
+import os
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import List, Optional
 
 import httpx
-import redis.asyncio as redis
-from fastapi import FastAPI, HTTPException, Header, Request
-from pydantic import BaseModel
 import mysql.connector
-from mysql.connector import pooling
+import redis.asyncio as redis
 import yaml
+from db_utils import execute_query, fetch_all, fetch_one
+from fastapi import FastAPI, Header, HTTPException, Request
+from mysql.connector import pooling
+from pydantic import BaseModel
+from schema import ReserveRequest
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-SEATS_PER_ROW = int(os.getenv("SEATS_PER_ROW", "15"))
-RESERVATION_TTL_SECONDS = int(os.getenv("RESERVATION_TTL_SECONDS", "600"))
+
+def required_env(key: str, cast=str):
+    """Return the value of an environment variable or raise if missing.
+
+    Args:
+        key: The name of the environment variable.
+        cast: Optional callable to cast the string value.
+
+    Raises:
+        RuntimeError: if the environment variable is not set.
+    """
+
+    value = os.environ.get(key)
+    if value is None:
+        raise RuntimeError(f"Missing required environment variable: {key}")
+    return cast(value)
+
+
+REDIS_URL = required_env("REDIS_URL")
+RESERVATION_TTL_SECONDS = required_env("RESERVATION_TTL_SECONDS", int)
 
 # MySQL Configuration
-MYSQL_HOST = os.getenv("MYSQL_HOST", "database")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "ticketuser")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "ticketpass")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "ticketing")
+MYSQL_HOST = required_env("MYSQL_HOST")
+MYSQL_PORT = required_env("MYSQL_PORT", int)
+MYSQL_USER = required_env("MYSQL_USER")
+MYSQL_PASSWORD = required_env("MYSQL_PASSWORD")
+MYSQL_DATABASE = required_env("MYSQL_DATABASE")
 
 # Queue names
 NOTIFICATION_QUEUE = "queue:notifications"
@@ -34,52 +53,17 @@ db_pool = None
 venues_config = {}
 
 
-class ReserveRequest(BaseModel):
-    event_id: str
-    num_seats: int
-    preferred_rows: Optional[List[str]] = None
-    user_id: Optional[str] = None
-
-
-def get_db_connection():
-    """Get a connection from the pool"""
-    return db_pool.get_connection()
-
-
-def fetch_one(query: str, params: tuple = None):
-    """Execute a query and return a single row as a dict."""
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute(query, params or ())
-    row = cursor.fetchone()
-    cursor.close()
-    conn.close()
-    return row
-
-
-def fetch_all(query: str, params: tuple = None):
-    """Execute a query and return all rows as a list of dicts."""
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute(query, params or ())
-    rows = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return rows
-
-
-def execute_query(query: str, params: tuple = None):
-    """Execute a statement that modifies data (INSERT/UPDATE/DELETE). Commits automatically."""
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute(query, params or ())
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-
 @app.on_event("startup")
 async def startup_event():
+    """Initialize global resources used by the booking service.
+
+    This performs the following steps:
+      - Establishes a Redis client and loads the Lua reservation script.
+      - Connects to MySQL using a pooled connection.
+      - Loads venue configuration from `venue_config.yaml`.
+
+    The globals `redis_client`, `reserve_sha`, `db_pool`, and `venues_config` are populated.
+    """
     global redis_client, reserve_sha, db_pool
 
     # Initialize Redis
@@ -158,11 +142,17 @@ async def get_venue(venue_name: str):
 
 @app.get("/events")
 async def list_events():
-    """Return a list of events from the DB."""
+    """Return a list of events stored in the database.
+
+    The endpoint returns minimal metadata per event (id, name, venue, date) and
+    normalizes timestamps to ISO 8601 dates.
+    """
     events = []
     if db_pool:
         try:
-            rows_db = fetch_all("SELECT event_id, name, start_time, venue FROM events")
+            rows_db = fetch_all(
+                db_pool, "SELECT event_id, name, start_time, venue FROM events"
+            )
 
             for ev in rows_db:
                 venue_name = ev.get("venue")
@@ -200,11 +190,17 @@ async def list_events():
 
 @app.get("/events/{event_id}")
 async def get_event(event_id: str):
+    """Return details for a single event, including venue seating layout.
+
+    The venue layout is inferred from the loaded venue configuration.
+    """
     # Try to fetch event from DB if available
     event = None
     if db_pool:
         try:
-            event = fetch_one("SELECT * FROM events WHERE event_id = %s", (event_id,))
+            event = fetch_one(
+                db_pool, "SELECT * FROM events WHERE event_id = %s", (event_id,)
+            )
         except Exception as e:
             print(f"Warning: could not query events table: {e}")
     else:
@@ -223,8 +219,12 @@ async def get_event(event_id: str):
     rows = []
     if venue_cfg:
         rows_list = venue_cfg.get("rows", [])
-        cols = venue_cfg.get("columns", [])
-        seats_count = len(cols) if cols else SEATS_PER_ROW
+        cols = venue_cfg.get("columns")
+        if not cols:
+            raise HTTPException(
+                status_code=500, detail="Venue configuration missing columns"
+            )
+        seats_count = len(cols)
         for r in rows_list:
             rows.append(
                 {
@@ -265,11 +265,31 @@ async def reserve(
     x_user_id: Optional[str] = Header(None),
     x_user_email: Optional[str] = Header(None),
 ):
+    """Reserve seats for an event.
+
+    This endpoint allocates a contiguous block of seats for the specified row
+    and event using a Redis Lua script, then records a reservation in MySQL.
+
+    - `idempotency_key` is optional and can be used to deduplicate requests.
+    - `x_user_id` / `x_user_email` are used for tracking and notifications.
+    """
     if req.num_seats < 1:
         raise HTTPException(status_code=400, detail="num_seats must be >= 1")
 
     # Use user_id from header or request body
     user_id = x_user_id or req.user_id or "anon"
+
+    # Idempotency: if provided, attempt to reuse the previous response
+    idemp_key = None
+    if idempotency_key:
+        idemp_key = f"idempotency:{idempotency_key}"
+        try:
+            existing = await redis_client.get(idemp_key)
+            if existing:
+                return json.loads(existing)
+        except Exception:
+            # best effort only; do not block reservation flow
+            pass
 
     # pick a row
     row = None
@@ -281,6 +301,36 @@ async def reserve(
 
     reservation_id = str(uuid.uuid4())
     expires_at = int(time.time()) + RESERVATION_TTL_SECONDS
+
+    # Determine seats per row for event/venue (must match venue config)
+    seats_per_row = None
+    if db_pool:
+        try:
+            evt = fetch_one(
+                db_pool, "SELECT venue FROM events WHERE event_id = %s", (req.event_id,)
+            )
+            if not evt:
+                raise HTTPException(status_code=404, detail="Event not found")
+
+            venue_cfg = venues_config.get(evt.get("venue"))
+            if venue_cfg:
+                cols = venue_cfg.get("columns")
+                if cols:
+                    seats_per_row = len(cols)
+                    if row not in venue_cfg.get("rows", []):
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Invalid row for event venue",
+                        )
+        except HTTPException:
+            raise
+        except Exception as e:
+            print(f"Warning: could not determine venue configuration for event: {e}")
+
+    if seats_per_row is None:
+        raise HTTPException(
+            status_code=500, detail="Venue configuration not found for event"
+        )
 
     key = f"seats:{req.event_id}:row:{row}:bitmap"
     try:
@@ -296,7 +346,7 @@ async def reserve(
             0,
             RESERVATION_TTL_SECONDS,
             expires_at,
-            SEATS_PER_ROW,
+            seats_per_row,
         )
     except redis.exceptions.ResponseError as e:
         if "NO_BLOCK" in str(e):
@@ -310,9 +360,8 @@ async def reserve(
     # Store reservation in MySQL
     if db_pool:
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
+            execute_query(
+                db_pool,
                 """INSERT INTO reservations (reservation_id, event_id, user_id, status, seats, expires_at) 
                    VALUES (%s, %s, %s, %s, %s, %s)""",
                 (
@@ -324,9 +373,6 @@ async def reserve(
                     datetime.fromtimestamp(int(res[2]), tz=timezone.utc),
                 ),
             )
-            conn.commit()
-            cursor.close()
-            conn.close()
         except Exception as e:
             print(f"Error storing reservation in MySQL: {e}")
 
@@ -344,7 +390,7 @@ async def reserve(
     }
     await redis_client.lpush(NOTIFICATION_QUEUE, json.dumps(notification))
 
-    return {
+    response = {
         "reservation_id": res[0],
         "event_id": req.event_id,
         "seats": seats,
@@ -352,11 +398,26 @@ async def reserve(
         "status": "reserved",
     }
 
+    if idemp_key:
+        try:
+            await redis_client.set(
+                idemp_key, json.dumps(response), ex=RESERVATION_TTL_SECONDS
+            )
+        except Exception:
+            # Best-effort cache; do not break the reservation flow
+            pass
+
+    return response
+
 
 @app.post("/payments/capture")
 async def payments_capture(body: dict, idempotency_key: Optional[str] = Header(None)):
+    """Capture a payment by forwarding the request to the configured payment provider.
+
+    This is a minimal implementation used for local development and testing.
+    """
     # Minimal implementation: forward to mock provider
-    payment_provider = os.getenv("PAYMENT_PROVIDER_URL", "http://payment-mock:9000")
+    payment_provider = required_env("PAYMENT_PROVIDER_URL")
     async with httpx.AsyncClient() as client:
         headers = {}
         if idempotency_key:
@@ -374,6 +435,11 @@ async def payments_capture(body: dict, idempotency_key: Optional[str] = Header(N
 
 @app.post("/payments/webhook")
 async def payments_webhook(request: Request):
+    """Handle payment provider webhooks.
+
+    Expected payloads include `capture_succeeded` and `capture_failed` events.
+    Successful captures create a booking and update reservation status.
+    """
     payload = await request.json()
     # naive signature validation (in real system, verify HMAC header)
     event = payload.get("event")
@@ -389,19 +455,17 @@ async def payments_webhook(request: Request):
         # Store booking in MySQL
         if db_pool:
             try:
-                conn = get_db_connection()
-                cursor = conn.cursor(dictionary=True)
-
                 # Get reservation details
-                cursor.execute(
+                reservation = fetch_one(
+                    db_pool,
                     "SELECT * FROM reservations WHERE reservation_id = %s",
                     (reservation_id,),
                 )
-                reservation = cursor.fetchone()
 
                 if reservation:
                     # Create booking
-                    cursor.execute(
+                    execute_query(
+                        db_pool,
                         """INSERT INTO bookings (booking_id, reservation_id, event_id, user_id, status, seats, payment_status, total_amount) 
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
                         (
@@ -417,12 +481,11 @@ async def payments_webhook(request: Request):
                     )
 
                     # Update reservation status
-                    cursor.execute(
+                    execute_query(
+                        db_pool,
                         "UPDATE reservations SET status = %s, confirmed_at = %s WHERE reservation_id = %s",
                         ("confirmed", datetime.now(timezone.utc), reservation_id),
                     )
-
-                    conn.commit()
 
                     # Get user email (simplified - would need to join with users table)
                     seats = (
@@ -448,8 +511,6 @@ async def payments_webhook(request: Request):
                         NOTIFICATION_QUEUE, json.dumps(notification)
                     )
 
-                cursor.close()
-                conn.close()
             except Exception as e:
                 print(f"Error processing payment webhook: {e}")
 
