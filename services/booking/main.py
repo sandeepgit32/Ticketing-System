@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import time
@@ -51,9 +52,13 @@ redis_client: Optional[redis.Redis] = None
 # Stored during startup via `script_load()` and used by `EVALSHA` for faster execution
 # without re-sending the full script on each request.
 reserve_sha = None
+reserve_explicit_sha = None
+release_explicit_sha = None
 
 db_pool = None
 venues_config = {}
+expiry_worker_task: Optional[asyncio.Task] = None
+expiry_worker_stop_event: Optional[asyncio.Event] = None
 
 
 def _parse_seat_id(seat_id: str) -> tuple[str, int]:
@@ -156,6 +161,150 @@ def build_seat_index_map(venue_cfg: Optional[dict]) -> dict:
     return {seat_id: idx for idx, seat_id in enumerate(seat_order)}
 
 
+def _reservation_redis_keys(event_id: str, reservation_id: str) -> tuple[str, str, str]:
+    return (
+        f"seats:{event_id}:bitmap",
+        f"reservation:{reservation_id}",
+        "reservations:ttl",
+    )
+
+
+async def _release_redis_hold(
+    event_id: str, reservation_id: str, seat_indexes: list[int]
+) -> None:
+    """Best-effort release for Redis-held seats and reservation metadata."""
+    if not seat_indexes:
+        return
+
+    bitmap_key, reservation_key, ttl_key = _reservation_redis_keys(
+        event_id, reservation_id
+    )
+    try:
+        await redis_client.evalsha(
+            release_explicit_sha,
+            3,
+            bitmap_key,
+            reservation_key,
+            ttl_key,
+            reservation_id,
+            json.dumps(seat_indexes),
+        )
+    except Exception:
+        # Redis is auxiliary. Failures are tolerated and handled by worker retry.
+        pass
+
+
+async def _release_expired_reservation_in_db(reservation_id: str) -> None:
+    """Expire a reservation in DB and free corresponding seats when still reserved."""
+    database_pool = require_db_pool(db_pool)
+    conn = database_pool.get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        conn.start_transaction()
+        cursor.execute(
+            """SELECT reservation_id, event_id, seats, status
+               FROM reservations
+               WHERE reservation_id = %s
+               FOR UPDATE""",
+            (reservation_id,),
+        )
+        reservation_row = cursor.fetchone()
+        if not reservation_row:
+            conn.commit()
+            return
+
+        if (reservation_row.get("status") or "").lower() != "reserved":
+            conn.commit()
+            return
+
+        raw_seats = reservation_row.get("seats")
+        seat_ids = []
+        if isinstance(raw_seats, str):
+            seat_ids = json.loads(raw_seats)
+        elif isinstance(raw_seats, list):
+            seat_ids = raw_seats
+
+        if seat_ids:
+            placeholders = ", ".join(["%s"] * len(seat_ids))
+            cursor.execute(
+                f"""UPDATE seats
+                    SET occupied = 0, reservation_id = NULL
+                    WHERE event_id = %s
+                      AND seat_id IN ({placeholders})
+                      AND reservation_id = %s""",
+                (
+                    reservation_row.get("event_id"),
+                    *seat_ids,
+                    reservation_id,
+                ),
+            )
+
+        cursor.execute(
+            """UPDATE reservations
+               SET status = %s
+               WHERE reservation_id = %s
+                 AND status = %s""",
+            ("expired", reservation_id, "reserved"),
+        )
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        print(f"Error expiring reservation in DB ({reservation_id}): {e}")
+    finally:
+        cursor.close()
+        conn.close()
+
+
+async def _process_expired_reservation(reservation_id: str) -> None:
+    """Expire one reservation from Redis and DB."""
+    reservation_key = f"reservation:{reservation_id}"
+    try:
+        payload = await redis_client.hgetall(reservation_key)
+    except Exception:
+        payload = {}
+
+    event_id = payload.get("event_id")
+    raw_indexes = payload.get("seat_indexes")
+    seat_indexes = []
+    if raw_indexes:
+        try:
+            parsed = json.loads(raw_indexes)
+            if isinstance(parsed, list):
+                seat_indexes = [int(i) for i in parsed]
+        except Exception:
+            seat_indexes = []
+
+    if event_id and seat_indexes:
+        await _release_redis_hold(event_id, reservation_id, seat_indexes)
+    else:
+        # If payload is already gone, ensure TTL index no longer references it.
+        try:
+            await redis_client.zrem("reservations:ttl", reservation_id)
+        except Exception:
+            pass
+
+    await _release_expired_reservation_in_db(reservation_id)
+
+
+async def _reservation_expiry_worker(stop_event: asyncio.Event) -> None:
+    """Background worker that releases expired reservation holds."""
+    while not stop_event.is_set():
+        try:
+            now_epoch = int(time.time())
+            expired = await redis_client.zrangebyscore(
+                "reservations:ttl", "-inf", now_epoch, start=0, num=100
+            )
+            if not expired:
+                await asyncio.sleep(1)
+                continue
+
+            for reservation_id in expired:
+                await _process_expired_reservation(reservation_id)
+        except Exception as e:
+            print(f"Reservation expiry worker error: {e}")
+            await asyncio.sleep(1)
+
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize global resources used by the booking service.
@@ -167,7 +316,13 @@ async def startup_event():
 
     The globals `redis_client`, `reserve_sha`, `db_pool`, and `venues_config` are populated.
     """
-    global redis_client, reserve_sha, db_pool
+    global \
+        redis_client, \
+        reserve_sha, \
+        reserve_explicit_sha, \
+        release_explicit_sha, \
+        db_pool
+    global expiry_worker_task, expiry_worker_stop_event
 
     # Initialize Redis
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
@@ -178,6 +333,22 @@ async def startup_event():
         script = f.read()
     reserve_sha = await redis_client.script_load(script)
     print("Loaded reserve Lua script, sha=", reserve_sha)
+
+    reserve_explicit_path = os.path.join(
+        os.path.dirname(__file__), "redis_reserve_explicit.lua"
+    )
+    with open(reserve_explicit_path, "r") as f:
+        reserve_explicit_script = f.read()
+    reserve_explicit_sha = await redis_client.script_load(reserve_explicit_script)
+    print("Loaded explicit reserve Lua script, sha=", reserve_explicit_sha)
+
+    release_explicit_path = os.path.join(
+        os.path.dirname(__file__), "redis_release_explicit.lua"
+    )
+    with open(release_explicit_path, "r") as f:
+        release_explicit_script = f.read()
+    release_explicit_sha = await redis_client.script_load(release_explicit_script)
+    print("Loaded explicit release Lua script, sha=", release_explicit_sha)
 
     # Initialize MySQL
     import time as sync_time
@@ -205,6 +376,28 @@ async def startup_event():
 
     # Load venue configuration (after package imports and app root available)
     load_venue_config()
+
+    # Start expiry worker after all dependencies are ready.
+    expiry_worker_stop_event = asyncio.Event()
+    expiry_worker_task = asyncio.create_task(
+        _reservation_expiry_worker(expiry_worker_stop_event)
+    )
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Stop background workers and close Redis connections."""
+    global expiry_worker_task, expiry_worker_stop_event
+
+    if expiry_worker_stop_event is not None:
+        expiry_worker_stop_event.set()
+
+    if expiry_worker_task is not None:
+        await expiry_worker_task
+        expiry_worker_task = None
+
+    if redis_client is not None:
+        await redis_client.aclose()
 
 
 @app.get("/venues")
@@ -534,7 +727,7 @@ async def reserve(
     reservation_id = str(uuid.uuid4())
     expires_at = int(time.time()) + RESERVATION_TTL_SECONDS
 
-    # Validate and reserve seats in DB.
+    # Validate and reserve seats in Redis first, then persist in DB.
     database_pool = require_db_pool(db_pool)
 
     # Parse and validate every requested seat before mutating state.
@@ -555,9 +748,66 @@ async def reserve(
     if len(normalized_seats) != len(set(normalized_seats)):
         raise HTTPException(status_code=400, detail="Duplicate seats in selected_seats")
 
+    # Read event metadata before Redis hold for seat-map validation.
+    event_row = fetch_one(
+        database_pool,
+        "SELECT event_id, venue, closed FROM events WHERE event_id = %s",
+        (req.event_id,),
+    )
+    if not event_row:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if int(event_row.get("closed") or 0) == 1:
+        raise HTTPException(status_code=409, detail="Event is closed")
+
+    venue_cfg = venues_config.get(event_row.get("venue"))
+    seat_index_map = build_seat_index_map(venue_cfg)
+    if not seat_index_map:
+        raise HTTPException(
+            status_code=500,
+            detail="Venue configuration not found or invalid for event",
+        )
+
+    seat_indexes = []
+    for seat_id in normalized_seats:
+        seat_idx = seat_index_map.get(seat_id)
+        if seat_idx is None:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid seat for venue: {seat_id}"
+            )
+        seat_indexes.append(seat_idx)
+
+    redis_hold_applied = False
+    bitmap_key, reservation_key, ttl_key = _reservation_redis_keys(
+        req.event_id, reservation_id
+    )
+    try:
+        hold_result = await redis_client.evalsha(
+            reserve_explicit_sha,
+            3,
+            bitmap_key,
+            reservation_key,
+            ttl_key,
+            reservation_id,
+            req.event_id,
+            user_email,
+            str(expires_at),
+            str(RESERVATION_TTL_SECONDS),
+            json.dumps(seat_indexes),
+        )
+        if not hold_result or hold_result[0] != "OK":
+            raise HTTPException(status_code=409, detail="Seats are no longer available")
+        redis_hold_applied = True
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Lua returns seat contention as a deterministic application error.
+        if "SEAT_TAKEN" in str(e):
+            raise HTTPException(status_code=409, detail="Seats are no longer available")
+        print(f"Error applying Redis hold: {e}")
+        raise HTTPException(status_code=503, detail="reservation service unavailable")
+
     conn = database_pool.get_connection()
     cursor = conn.cursor(dictionary=True)
-    event_row = None
     try:
         conn.start_transaction()
 
@@ -619,27 +869,21 @@ async def reserve(
         conn.commit()
     except HTTPException:
         conn.rollback()
+        if redis_hold_applied:
+            await _release_redis_hold(req.event_id, reservation_id, seat_indexes)
         raise
     except Exception as e:
         conn.rollback()
+        if redis_hold_applied:
+            await _release_redis_hold(req.event_id, reservation_id, seat_indexes)
         print(f"Error reserving seats: {e}")
         raise HTTPException(status_code=500, detail="could not reserve seats")
     finally:
         cursor.close()
         conn.close()
 
-    # Best-effort Redis bitmap sync after DB commit.
+    # Redis bitmap was already atomically updated by Lua.
     seats = list(normalized_seats)
-    event_bitmap_key = f"seats:{req.event_id}:bitmap"
-    seat_index_map = build_seat_index_map(venues_config.get(event_row.get("venue")))
-    for seat_id in seats:
-        try:
-            seat_idx = seat_index_map.get(seat_id)
-            if seat_idx is not None:
-                await redis_client.setbit(event_bitmap_key, seat_idx, 1)
-        except Exception:
-            # DB remains the source of truth if Redis update fails.
-            pass
 
     expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
 
