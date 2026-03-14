@@ -10,7 +10,7 @@ Inputs:
   ARGV[2]  - reservation_id (unique identifier for the reservation)
   ARGV[3]  - event_id
   ARGV[4]  - row_id
-  ARGV[5]  - user_id
+  ARGV[5]  - user_email
   ARGV[6]  - amount_cents
   ARGV[7]  - ttl_seconds (how long the reservation key should live)
   ARGV[8]  - expiry_epoch_seconds (when the reservation expires)
@@ -34,7 +34,7 @@ Behavior:
 -- ARGV[2] = reservation_id
 -- ARGV[3] = event_id
 -- ARGV[4] = row_id
--- ARGV[5] = user_id
+-- ARGV[5] = user_email
 -- ARGV[6] = amount_cents
 -- ARGV[7] = ttl_seconds
 -- ARGV[8] = expiry_epoch_seconds
@@ -45,7 +45,7 @@ local num_seats = tonumber(ARGV[1])
 local reservation_id = ARGV[2]
 local event_id = ARGV[3]
 local row_id = ARGV[4]
-local user_id = ARGV[5]
+local user_email = ARGV[5]
 local amount_cents = ARGV[6]
 local ttl_seconds = tonumber(ARGV[7])
 local expiry_epoch = tonumber(ARGV[8])
@@ -89,7 +89,7 @@ for i = 0, num_seats - 1 do
 end
 seats_json = '[' .. table.concat(seats, ',') .. ']'
 
-redis.call('HMSET', 'reservation:'..reservation_id, 'event_id', event_id, 'seats', seats_json, 'status', 'reserved', 'user_id', user_id, 'amount', amount_cents, 'reserved_until', expiry_epoch)
+redis.call('HMSET', 'reservation:'..reservation_id, 'event_id', event_id, 'seats', seats_json, 'status', 'reserved', 'user_email', user_email, 'amount', amount_cents, 'reserved_until', expiry_epoch)
 redis.call('EXPIRE', 'reservation:'..reservation_id, ttl_seconds)
 redis.call('ZADD', 'reservations:ttl', expiry_epoch, reservation_id)
 

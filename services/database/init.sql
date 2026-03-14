@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE TABLE IF NOT EXISTS bookings (
     booking_id VARCHAR(36) PRIMARY KEY,
     event_id VARCHAR(36) NOT NULL,
-    user_id VARCHAR(36) NOT NULL,
+    user_email VARCHAR(255) NOT NULL,
     status VARCHAR(20) NOT NULL,
     seats JSON NOT NULL,
     payment_status VARCHAR(20) NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NULL,
-    INDEX idx_user_id (user_id),
+    INDEX idx_user_email (user_email),
     INDEX idx_event_id (event_id),
     INDEX idx_status (status)
 );

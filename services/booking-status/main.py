@@ -1,8 +1,5 @@
 import os
-from datetime import datetime, timezone
 
-import httpx
-import mysql.connector
 from flask import Flask, jsonify, request, abort
 from flask_cors import CORS
 from mysql.connector import pooling
@@ -19,7 +16,6 @@ MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
 MYSQL_USER = os.getenv("MYSQL_USER", "ticketuser")
 MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "ticketpass")
 MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "ticketing")
-AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth:8000")
 
 app = Flask(__name__)
 CORS(app, origins="*", supports_credentials=True)
@@ -65,7 +61,7 @@ def startup_event():
             )
             print("Connected to database")
             break
-        except Exception as e:
+        except Exception:
             if i < max_retries - 1:
                 print(f"Waiting for database... ({i + 1}/{max_retries})")
                 time.sleep(2)
@@ -73,36 +69,20 @@ def startup_event():
                 raise
 
 
-def verify_token():
+def get_current_user_email() -> str:
     """
-    Extract the bearer JWT from the `Authorization` header and validate it.
+    Read authenticated user identity from the gateway-forwarded header.
 
-    The token is forwarded to the auth microservice's `/verify` endpoint.
-    If the header is missing or malformed the request aborts with 401. Network
-    errors produce a 503, and a non-200 response from auth results in 401.
+    The booking service architecture performs JWT verification in the API
+    gateway. Downstream services trust forwarded identity headers.
 
     Returns:
-        dict: The JSON payload returned by auth (contains `user_id`, etc.).
+        str: Authenticated user's email.
     """
-    auth_header = request.headers.get("Authorization")
-    if not auth_header or not auth_header.lower().startswith("bearer "):
-        abort(401, description="Missing or invalid Authorization header")
-
-    token = auth_header.split(None, 1)[1]
-
-    try:
-        response = httpx.post(
-            f"{AUTH_SERVICE_URL}/verify",
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=5.0,
-        )
-    except httpx.RequestError:
-        abort(503, description="Auth service unavailable")
-
-    if response.status_code != 200:
-        abort(401, description="Invalid or expired token")
-
-    return response.json()
+    user_email = request.headers.get("X-User-Email")
+    if not user_email:
+        abort(400, description="X-User-Email header is required")
+    return user_email
 
 
 @app.route("/bookings/<booking_id>", methods=["GET"])
@@ -116,17 +96,17 @@ def get_booking_details(booking_id: str):
     Returns:
         flask.Response: JSON-serialized booking details.
 
-    The endpoint relies on `verify_token()` to authenticate. If the booking
-    does not exist a 404 error is returned. If the authenticated user does not
-    match the booking's `user_id`, a 403 is raised.
+    The endpoint relies on gateway-provided `X-User-Email` identity. If the
+    booking does not exist a 404 error is returned. If the authenticated user
+    does not match the booking's `user_email`, a 403 is raised.
     """
-    current_user = verify_token()
+    current_user_email = get_current_user_email()
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
     try:
         cursor.execute(
-            """SELECT booking_id, event_id, user_id, status, 
+            """SELECT booking_id, event_id, user_email, status, 
                       seats, payment_status, total_amount, created_at, updated_at, expires_at 
                FROM bookings WHERE booking_id = %s""",
             (booking_id,),
@@ -137,7 +117,7 @@ def get_booking_details(booking_id: str):
             abort(404, description="Booking not found")
 
         # Check if user has access to this booking
-        if booking["user_id"] != current_user.get("user_id"):
+        if booking["user_email"] != current_user_email:
             abort(403, description="Access denied")
 
         import json
@@ -145,7 +125,7 @@ def get_booking_details(booking_id: str):
         model = BookingDetails(
             booking_id=booking["booking_id"],
             event_id=booking["event_id"],
-            user_id=booking["user_id"],
+            user_email=booking["user_email"],
             status=booking["status"],
             seats=json.loads(booking["seats"])
             if isinstance(booking["seats"], str)
@@ -175,33 +155,32 @@ def get_user_bookings():
       - `limit` (int, default 50)
       - `offset` (int, default 0)
 
-    The token is validated via `verify_token`. Results include a `total`
-    count and a `bookings` list.
+    The current user is identified via gateway-forwarded `X-User-Email`.
+    Results include a `total` count and a `bookings` list.
     """
-    current_user = verify_token()
+    user_email = get_current_user_email()
     limit = int(request.args.get("limit", 50))
     offset = int(request.args.get("offset", 0))
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
     try:
-        user_id = current_user.get("user_id")
-
         # Get total count
         cursor.execute(
-            "SELECT COUNT(*) as total FROM bookings WHERE user_id = %s", (user_id,)
+            "SELECT COUNT(*) as total FROM bookings WHERE user_email = %s",
+            (user_email,),
         )
         total = cursor.fetchone()["total"]
 
         # Get bookings with pagination
         cursor.execute(
-            """SELECT booking_id, event_id, user_id, status, 
+            """SELECT booking_id, event_id, user_email, status, 
                       seats, payment_status, total_amount, created_at, updated_at, expires_at 
                FROM bookings 
-               WHERE user_id = %s 
+               WHERE user_email = %s 
                ORDER BY created_at DESC 
                LIMIT %s OFFSET %s""",
-            (user_id, limit, offset),
+            (user_email, limit, offset),
         )
         bookings = cursor.fetchall()
 
@@ -213,7 +192,7 @@ def get_user_bookings():
                 BookingDetails(
                     booking_id=booking["booking_id"],
                     event_id=booking["event_id"],
-                    user_id=booking["user_id"],
+                    user_email=booking["user_email"],
                     status=booking["status"],
                     seats=json.loads(booking["seats"])
                     if isinstance(booking["seats"], str)
