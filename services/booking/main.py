@@ -3,7 +3,7 @@ import os
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Optional
 
 import httpx
 import mysql.connector
@@ -12,7 +12,6 @@ import yaml
 from db_utils import execute_query, fetch_all, fetch_one
 from fastapi import FastAPI, Header, HTTPException, Request
 from mysql.connector import pooling
-from pydantic import BaseModel
 from schema import ReserveRequest
 
 
@@ -48,9 +47,54 @@ NOTIFICATION_QUEUE = "queue:notifications"
 
 app = FastAPI(title="Booking Service")
 redis_client: Optional[redis.Redis] = None
+
+# SHA1 hash of the loaded Redis Lua reservation script.
+# Stored during startup via `script_load()` and used by `EVALSHA` for faster execution
+# without re-sending the full script on each request.
 reserve_sha = None
+
 db_pool = None
 venues_config = {}
+
+
+def load_venue_config(cfg_path: Optional[str] = None) -> None:
+    """Load venue configuration YAML into the global `venues_config`.
+
+    Args:
+        cfg_path: Optional path to the YAML file. Defaults to `venue_config.yaml` next to this module.
+    """
+    global venues_config
+    if cfg_path is None:
+        cfg_path = os.path.join(os.path.dirname(__file__), "venue_config.yaml")
+
+    # Reset to avoid stale data when reloading
+    venues_config = {}
+
+    try:
+        with open(cfg_path, "r") as vf:
+            cfg = yaml.safe_load(vf)
+            if cfg and "venues" in cfg and isinstance(cfg["venues"], dict):
+                # new structure: venues is a mapping of display name -> properties
+                for name, v in cfg["venues"].items():
+                    # ensure we have a mutable copy
+                    venue_entry = dict(v) if isinstance(v, dict) else {}
+                    venue_entry.setdefault("name", name)
+
+                    # Ensure seat price is present and normalized
+                    seat_price = venue_entry.get("seat_price", {})
+                    if isinstance(seat_price, dict):
+                        normalized = {}
+                        for row_key, price in seat_price.items():
+                            try:
+                                normalized[row_key] = float(price)
+                            except Exception:
+                                normalized[row_key] = price
+                        venue_entry["seat_price"] = normalized
+
+                    venues_config[name] = venue_entry
+        print("Loaded venue_config.yaml")
+    except Exception as e:
+        print(f"Warning: could not load venue_config.yaml: {e}")
 
 
 @app.on_event("startup")
@@ -70,8 +114,8 @@ async def startup_event():
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
     # Load lua script
-    script_path = os.path.join(os.path.dirname(__file__), "redis_reserve.lua")
-    with open(script_path, "r") as f:
+    lua_script_path = os.path.join(os.path.dirname(__file__), "redis_reserve.lua")
+    with open(lua_script_path, "r") as f:
         script = f.read()
     reserve_sha = await redis_client.script_load(script)
     print("Loaded reserve Lua script, sha=", reserve_sha)
@@ -101,20 +145,7 @@ async def startup_event():
                 print(f"Warning: Could not connect to database: {e}")
 
     # Load venue configuration (after package imports and app root available)
-    try:
-        cfg_path = os.path.join(os.path.dirname(__file__), "venue_config.yaml")
-        with open(cfg_path, "r") as vf:
-            cfg = yaml.safe_load(vf)
-            if cfg and "venues" in cfg and isinstance(cfg["venues"], dict):
-                # new structure: venues is a mapping of display name -> properties
-                for name, v in cfg["venues"].items():
-                    # ensure we have a mutable copy
-                    venue_entry = dict(v) if isinstance(v, dict) else {}
-                    venue_entry.setdefault("name", name)
-                    venues_config[name] = venue_entry
-        print("Loaded venue_config.yaml")
-    except Exception as e:
-        print(f"Warning: could not load venue_config.yaml: {e}")
+    load_venue_config()
 
 
 @app.get("/venues")
@@ -137,6 +168,7 @@ async def get_venue(venue_name: str):
         "name": venue.get("name"),
         "rows": venue.get("rows"),
         "columns": venue.get("columns"),
+        "seat_price": venue.get("seat_price"),
     }
 
 
@@ -154,9 +186,9 @@ async def list_events():
                 db_pool, "SELECT event_id, name, start_time, venue FROM events"
             )
 
-            for ev in rows_db:
-                venue_name = ev.get("venue")
-                start_time = ev.get("start_time")
+            for event in rows_db:
+                venue_name = event.get("venue")
+                start_time = event.get("start_time")
                 try:
                     if isinstance(start_time, (datetime,)):
                         start_iso = start_time.isoformat()
@@ -171,8 +203,8 @@ async def list_events():
                 date_only = start_iso.split("T")[0] if "T" in start_iso else start_iso
                 events.append(
                     {
-                        "event_id": ev.get("event_id"),
-                        "name": ev.get("name"),
+                        "event_id": event.get("event_id"),
+                        "name": event.get("name"),
                         "venue": venue_name,
                         "date": date_only,
                     }
@@ -215,29 +247,50 @@ async def get_event(event_id: str):
     if venue_name and venues_config:
         venue_cfg = venues_config.get(venue_name)
 
-    # Build rows data from venue config or fallback
-    rows = []
+    # Build seat_arrangements data from venue config or fallback
+    seat_arrangements = []
     if venue_cfg:
-        rows_list = venue_cfg.get("rows", [])
+        rows_list = venue_cfg.get("rows")
         cols = venue_cfg.get("columns")
-        if not cols:
+        if not cols or not rows_list:
             raise HTTPException(
-                status_code=500, detail="Venue configuration missing columns"
+                status_code=500, detail="Venue configuration missing columns or rows"
             )
-        seats_count = len(cols)
         for r in rows_list:
-            rows.append(
+            seat_arrangements.append(
                 {
                     "row_id": r,
-                    "seats_count": seats_count,
-                    "available_intervals": [{"start": 1, "length": seats_count}],
-                    "cached_at": datetime.now(timezone.utc).isoformat(),
+                    "columns": cols,
                 }
             )
     else:
         raise HTTPException(
             status_code=500, detail="Venue configuration not found for event"
         )
+
+    # Build seat-level availability and pricing maps (keyed by seat ID like "A1").
+    # These must come from the event row in DB; do not synthesize defaults from config.
+    seat_availability_map = {}
+    seat_price_map = {}
+
+    # Load maps from DB (may be stored as JSON string or JSON column)
+    stored_avail = event.get("seat_availability_map")
+    if isinstance(stored_avail, str):
+        try:
+            stored_avail = json.loads(stored_avail)
+        except Exception:
+            stored_avail = None
+    if isinstance(stored_avail, dict):
+        seat_availability_map = stored_avail
+
+    stored_price = event.get("seat_price_map")
+    if isinstance(stored_price, str):
+        try:
+            stored_price = json.loads(stored_price)
+        except Exception:
+            stored_price = None
+    if isinstance(stored_price, dict):
+        seat_price_map = stored_price
 
     # normalize start_time to isoformat
     start_time = event.get("start_time")
@@ -247,14 +300,18 @@ async def get_event(event_id: str):
         else:
             start_iso = str(start_time)
     except Exception:
-        start_iso = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        raise HTTPException(
+            status_code=500, detail="invalid start_time format in database"
+        )
 
     return {
         "event_id": event.get("event_id", event_id),
         "name": event.get("name", f"Event {event_id}"),
         "start_time": start_iso,
         "venue": event.get("venue", "Sample Stadium"),
-        "rows": rows,
+        "seat_arrangements": seat_arrangements,
+        "seat_availability_map": seat_availability_map,
+        "seat_price_map": seat_price_map,
     }
 
 
