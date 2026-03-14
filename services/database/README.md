@@ -20,6 +20,9 @@ Authentication and user information table.
 ### events
 Event catalog with venue and timing information.
 
+### seats
+Normalized seat inventory per event, including occupancy and per-seat pricing.
+
 ### reservations
 Temporary seat reservations with expiration tracking.
 

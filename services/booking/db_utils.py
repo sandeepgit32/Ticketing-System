@@ -16,6 +16,24 @@ def get_db_connection(db_pool):
     return db_pool.get_connection()
 
 
+def require_db_pool(db_pool):
+    """Ensure a DB pool is available.
+
+    Args:
+        db_pool: The current database pool instance (may be None).
+
+    Returns:
+        The same db_pool instance if it is truthy.
+
+    Raises:
+        fastapi.HTTPException: If the pool is not available.
+    """
+
+    if not db_pool:
+        raise HTTPException(status_code=503, detail="database unavailable")
+    return db_pool
+
+
 def fetch_one(db_pool, query: str, params: tuple = None):
     """Execute a SELECT query and return a single row as a dict.
 
@@ -64,24 +82,6 @@ def fetch_all(db_pool, query: str, params: tuple = None):
     cursor.close()
     conn.close()
     return rows
-
-
-def require_db_pool(db_pool):
-    """Ensure a DB pool is available.
-
-    Args:
-        db_pool: The current database pool instance (may be None).
-
-    Returns:
-        The same db_pool instance if it is truthy.
-
-    Raises:
-        fastapi.HTTPException: If the pool is not available.
-    """
-
-    if not db_pool:
-        raise HTTPException(status_code=503, detail="database unavailable")
-    return db_pool
 
 
 def execute_query(db_pool, query: str, params: tuple = None):

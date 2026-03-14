@@ -16,16 +16,43 @@ CREATE TABLE IF NOT EXISTS events (
     event_id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
     venue VARCHAR(255),
-    seat_availability_map JSON,
-    seat_price_map JSON,
     start_time TIMESTAMP,
+    closed TINYINT(1) NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Seats table (normalized seat inventory per event)
+CREATE TABLE IF NOT EXISTS seats (
+    event_id VARCHAR(36) NOT NULL,
+    seat_id VARCHAR(20) NOT NULL,
+    occupied TINYINT(1) NOT NULL DEFAULT 0,
+    reservation_id VARCHAR(36) DEFAULT NULL,
+    price DECIMAL(10, 2) NOT NULL,
+    PRIMARY KEY (event_id, seat_id),
+    INDEX idx_seats_event_occupied (event_id, occupied),
+    INDEX idx_seats_reservation_id (reservation_id)
+);
+
+-- Reservations table (temporary seat holds before payment capture)
+CREATE TABLE IF NOT EXISTS reservations (
+    reservation_id VARCHAR(36) PRIMARY KEY,
+    event_id VARCHAR(36) NOT NULL,
+    user_email VARCHAR(255) NOT NULL,
+    status VARCHAR(20) NOT NULL,
+    seats JSON NOT NULL,
+    expires_at TIMESTAMP NULL,
+    confirmed_at TIMESTAMP NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_reservations_event_id (event_id),
+    INDEX idx_reservations_user_email (user_email),
+    INDEX idx_reservations_status (status)
 );
 
 -- Bookings table (handles both reservations and confirmed bookings via status field)
 -- Status values: 'reserved' (temporary hold), 'confirmed' (payment completed), 'expired', 'cancelled'
 CREATE TABLE IF NOT EXISTS bookings (
     booking_id VARCHAR(36) PRIMARY KEY,
+    reservation_id VARCHAR(36) NULL,
     event_id VARCHAR(36) NOT NULL,
     user_email VARCHAR(255) NOT NULL,
     status VARCHAR(20) NOT NULL,
@@ -36,6 +63,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     expires_at TIMESTAMP NULL,
     INDEX idx_user_email (user_email),
+    INDEX idx_reservation_id (reservation_id),
     INDEX idx_event_id (event_id),
     INDEX idx_status (status)
 );

@@ -6,38 +6,12 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-import mysql.connector
 import redis.asyncio as redis
 import yaml
 from db_utils import execute_query, fetch_all, fetch_one, require_db_pool
 from fastapi import FastAPI, Header, HTTPException, Request
 from mysql.connector import pooling
 from schema import CreateEventRequest, ReserveRequest
-
-
-def _load_json_map(value):
-    """Helper to load a JSON map from a DB field, with error handling."""
-    if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except Exception:
-            return {}
-    return value if isinstance(value, dict) else {}
-
-
-def _parse_seat_id(seat_id: str) -> tuple[str, int]:
-    """
-    Parse a seat ID into its row and column components.
-    Example: "A12" -> ("A", 12)
-    """
-    i = 0
-    while i < len(seat_id) and seat_id[i].isalpha():
-        i += 1
-    row = seat_id[:i].upper()
-    col_raw = seat_id[i:]
-    if not row or not col_raw.isdigit():
-        raise ValueError(f"invalid seat id: {seat_id}")
-    return row, int(col_raw)
 
 
 def required_env(key: str, cast=str):
@@ -82,6 +56,21 @@ db_pool = None
 venues_config = {}
 
 
+def _parse_seat_id(seat_id: str) -> tuple[str, int]:
+    """
+    Parse a seat ID into its row and column components.
+    Example: "A12" -> ("A", 12)
+    """
+    i = 0
+    while i < len(seat_id) and seat_id[i].isalpha():
+        i += 1
+    row = seat_id[:i].upper()
+    col_raw = seat_id[i:]
+    if not row or not col_raw.isdigit():
+        raise ValueError(f"invalid seat id: {seat_id}")
+    return row, int(col_raw)
+
+
 def load_venue_config(cfg_path: Optional[str] = None) -> None:
     """Load venue configuration YAML into the global `venues_config`.
 
@@ -122,17 +111,14 @@ def load_venue_config(cfg_path: Optional[str] = None) -> None:
         print(f"Warning: could not load venue_config.yaml: {e}")
 
 
-def build_default_seat_maps(venue_cfg: dict) -> tuple[dict, dict]:
-    """Build default availability + price maps for a venue.
-
-    Availability is initialized to 0 for all seats and pricing comes from the
-    venue configuration's per-row pricing.
+def build_default_seat_rows(venue_cfg: dict) -> list[tuple[str, int, float]]:
+    """Build default per-seat rows for DB insertion.
 
     Args:
         venue_cfg: The venue configuration dict (from `venues_config`).
 
     Returns:
-        A tuple `(availability_map, price_map)`.
+        List of tuples: `(seat_id, occupied, price)`.
 
     Raises:
         HTTPException: if the venue configuration is missing required fields.
@@ -147,17 +133,27 @@ def build_default_seat_maps(venue_cfg: dict) -> tuple[dict, dict]:
 
     seat_price_by_row = venue_cfg.get("seat_price", {}) or {}
 
-    seat_availability_map = {}
-    seat_price_map = {}
+    seat_rows = []
 
     for r in rows_list:
         row_price = seat_price_by_row.get(r, 0)
         for c in cols:
             key = f"{r}{c}"
-            seat_availability_map[key] = 0
-            seat_price_map[key] = float(row_price) if row_price is not None else 0
+            price = float(row_price) if row_price is not None else 0
+            seat_rows.append((key, 0, price))
 
-    return seat_availability_map, seat_price_map
+    return seat_rows
+
+
+def build_seat_index_map(venue_cfg: Optional[dict]) -> dict:
+    """Create deterministic seat index mapping used for Redis bitmap sync."""
+    if not venue_cfg:
+        return {}
+    try:
+        seat_order = [seat_id for seat_id, _, _ in build_default_seat_rows(venue_cfg)]
+    except HTTPException:
+        return {}
+    return {seat_id: idx for idx, seat_id in enumerate(seat_order)}
 
 
 @app.on_event("startup")
@@ -288,27 +284,50 @@ async def get_event(event_id: str):
 
     The venue layout is inferred from the loaded venue configuration.
     """
-    # Ensure DB is available and fetch event
+    # Ensure DB is available and fetch event + seats in a single query.
     database_pool = require_db_pool(db_pool)
 
-    event = None
     try:
-        event = fetch_one(
-            database_pool, "SELECT * FROM events WHERE event_id = %s", (event_id,)
+        rows = fetch_all(
+            database_pool,
+            """SELECT e.event_id, e.name, e.venue, e.start_time, e.closed, s.seat_id, s.occupied, s.price
+               FROM events e
+               LEFT JOIN seats s ON s.event_id = e.event_id
+               WHERE e.event_id = %s""",
+            (event_id,),
         )
     except Exception as e:
-        print(f"Warning: could not query events table: {e}")
+        print(f"Warning: could not query event details: {e}")
+        raise HTTPException(status_code=500, detail="could not fetch event")
 
-    if not event:
+    if not rows:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    # Determine venue configuration (match by name or id)
+    event = rows[0]
     venue_name = event.get("venue")
-    venue_cfg = None
-    if venue_name and venues_config:
-        venue_cfg = venues_config.get(venue_name)
+    venue_cfg = venues_config.get(venue_name) if venue_name and venues_config else None
 
-    # Build seat_arrangements data from venue config or fallback
+    seat_availability_map = {}
+    seat_price_map = {}
+    for row in rows:
+        seat_id = row.get("seat_id")
+        if not seat_id:
+            continue
+
+        try:
+            occupied = int(row.get("occupied", 0))
+        except Exception:
+            occupied = 0
+
+        price = row.get("price", 0)
+        try:
+            price = float(price) if price is not None else 0
+        except Exception:
+            price = 0
+
+        seat_availability_map[seat_id] = 1 if occupied else 0
+        seat_price_map[seat_id] = price
+
     seat_arrangements = []
     if venue_cfg:
         rows_list = venue_cfg.get("rows")
@@ -318,25 +337,15 @@ async def get_event(event_id: str):
                 status_code=500, detail="Venue configuration missing columns or rows"
             )
         for r in rows_list:
-            seat_arrangements.append(
-                {
-                    "row_id": r,
-                    "columns": cols,
-                }
-            )
+            seat_arrangements.append([f"{r}{c}" for c in cols])
     else:
         raise HTTPException(
             status_code=500, detail="Venue configuration not found for event"
         )
 
-    # Build seat-level availability and pricing maps (keyed by seat ID like "A1").
-    seat_availability_map = _load_json_map(event.get("seat_availability_map"))
-    seat_price_map = _load_json_map(event.get("seat_price_map"))
-
-    # normalize start_time to isoformat
     start_time = event.get("start_time")
     try:
-        if isinstance(start_time, (datetime,)):
+        if isinstance(start_time, datetime):
             start_iso = start_time.isoformat()
         else:
             start_iso = str(start_time)
@@ -350,6 +359,7 @@ async def get_event(event_id: str):
         "name": event.get("name", f"Event {event_id}"),
         "start_time": start_iso,
         "venue": event.get("venue", "Sample Stadium"),
+        "closed": int(event.get("closed") or 0),
         "seat_arrangements": seat_arrangements,
         "seat_availability_map": seat_availability_map,
         "seat_price_map": seat_price_map,
@@ -360,48 +370,126 @@ async def get_event(event_id: str):
 async def create_event(req: CreateEventRequest):
     """Create a new event record.
 
-    This endpoint stores event metadata in MySQL, including optional per-seat
-    availability/pricing maps. The maps must be provided by the caller and are
-    stored as JSON in the database.
+    This endpoint stores event metadata in MySQL and pre-populates the `seats`
+    table for the event using the configured venue layout and pricing.
     """
-    # Generate event_id if not provided
     event_id = str(uuid.uuid4())
 
-    # Ensure venue exists in config (required for later lookups)
     if req.venue and venues_config.get(req.venue) is None:
         raise HTTPException(status_code=400, detail="Unknown venue")
 
-    # Persist to DB
     database_pool = require_db_pool(db_pool)
-
-    # Build default seat maps from venue config
-    # - availability: all seats closed (0)
-    # - pricing: derived from per-row pricing in config
     venue_cfg = venues_config.get(req.venue)
-    seat_availability_map, seat_price_map = (
-        build_default_seat_maps(venue_cfg) if venue_cfg else ({}, {})
-    )
+    seat_rows = build_default_seat_rows(venue_cfg) if venue_cfg else []
 
+    conn = database_pool.get_connection()
+    cursor = conn.cursor()
     try:
-        execute_query(
-            database_pool,
-            """INSERT INTO events (event_id, name, venue, start_time, seat_availability_map, seat_price_map)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (
-                event_id,
-                req.name,
-                req.venue,
-                req.start_time,
-                json.dumps(seat_availability_map),
-                json.dumps(seat_price_map),
-            ),
+        conn.start_transaction()
+        cursor.execute(
+            """INSERT INTO events (event_id, name, venue, start_time)
+               VALUES (%s, %s, %s, %s)""",
+            (event_id, req.name, req.venue, req.start_time),
         )
+
+        if seat_rows:
+            cursor.executemany(
+                """INSERT INTO seats (event_id, seat_id, occupied, reservation_id, price)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                [
+                    (event_id, seat_id, occupied, None, price)
+                    for seat_id, occupied, price in seat_rows
+                ],
+            )
+
+        conn.commit()
     except Exception as e:
-        # Unique key violation or other insert errors
+        conn.rollback()
         print(f"Error inserting event: {e}")
         raise HTTPException(status_code=500, detail="could not create event")
+    finally:
+        cursor.close()
+        conn.close()
 
     return {"event_id": event_id}
+
+
+@app.get("/events/{event_id}/close")
+async def close_event(event_id: str):
+    """Close an event after it has started and clean up runtime state."""
+    database_pool = require_db_pool(db_pool)
+
+    conn = database_pool.get_connection()
+    cursor = conn.cursor(dictionary=True)
+    reservation_ids = []
+    try:
+        conn.start_transaction()
+
+        cursor.execute(
+            "SELECT event_id, start_time, closed FROM events WHERE event_id = %s FOR UPDATE",
+            (event_id,),
+        )
+        event = cursor.fetchone()
+        if not event:
+            raise HTTPException(status_code=404, detail="Event not found")
+
+        if int(event.get("closed") or 0) == 1:
+            conn.rollback()
+            return {"event_id": event_id, "status": "already_closed"}
+
+        start_time = event.get("start_time")
+        if not isinstance(start_time, datetime):
+            raise HTTPException(status_code=500, detail="invalid start_time format")
+        if start_time.tzinfo is None:
+            start_time = start_time.replace(tzinfo=timezone.utc)
+
+        now_utc = datetime.now(timezone.utc)
+        if now_utc <= start_time:
+            raise HTTPException(
+                status_code=409,
+                detail="Event cannot be closed before or at start_time",
+            )
+
+        cursor.execute(
+            "SELECT reservation_id FROM reservations WHERE event_id = %s",
+            (event_id,),
+        )
+        reservation_ids = [
+            row["reservation_id"]
+            for row in cursor.fetchall()
+            if row.get("reservation_id")
+        ]
+
+        cursor.execute("DELETE FROM seats WHERE event_id = %s", (event_id,))
+        cursor.execute("DELETE FROM bookings WHERE event_id = %s", (event_id,))
+        cursor.execute("DELETE FROM reservations WHERE event_id = %s", (event_id,))
+        cursor.execute("UPDATE events SET closed = 1 WHERE event_id = %s", (event_id,))
+
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        print(f"Error closing event: {e}")
+        raise HTTPException(status_code=500, detail="could not close event")
+    finally:
+        cursor.close()
+        conn.close()
+
+    try:
+        await redis_client.delete(f"seats:{event_id}:bitmap")
+    except Exception:
+        pass
+
+    for reservation_id in reservation_ids:
+        try:
+            await redis_client.delete(f"reservation:{reservation_id}")
+            await redis_client.zrem("reservations:ttl", reservation_id)
+        except Exception:
+            pass
+
+    return {"event_id": event_id, "status": "closed"}
 
 
 @app.post("/bookings/reserve", status_code=201)
@@ -415,7 +503,7 @@ async def reserve(
     This endpoint reserves seats passed via `selected_seats`
     (for example: ["A1", "B2"]).
 
-    It updates the event seat availability map and stores the reservation in MySQL.
+    It updates seat rows in the `seats` table and stores the reservation in MySQL.
 
     - `idempotency_key`: Optional key used to deduplicate retries.
     - `x_user_email`: Caller identity used for reservation ownership and notifications.
@@ -446,48 +534,8 @@ async def reserve(
     reservation_id = str(uuid.uuid4())
     expires_at = int(time.time()) + RESERVATION_TTL_SECONDS
 
-    # Load the event's current seat availability map from DB.
+    # Validate and reserve seats in DB.
     database_pool = require_db_pool(db_pool)
-
-    seat_availability_map = {}
-
-    try:
-        event = fetch_one(
-            database_pool,
-            "SELECT seat_availability_map FROM events WHERE event_id = %s",
-            (req.event_id,),
-        )
-        if not event:
-            raise HTTPException(status_code=404, detail="Event not found")
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"Warning: could not query event for reservation: {e}")
-
-    # This map is used for both conflict checks and persistence.
-    seat_availability_map = _load_json_map(event.get("seat_availability_map"))
-    if not seat_availability_map:
-        raise HTTPException(
-            status_code=500, detail="Seat availability map not found for event"
-        )
-
-    # Validate seat states can be parsed as integers; keep flow resilient.
-    for seat_id, state in seat_availability_map.items():
-        try:
-            state = int(state)
-        except Exception as e:
-            print(f"Warning: invalid seat state for {seat_id}: {state}, error: {e}")
-            state = 0
-
-    seats = []
-    reserved_seat_ids = []
-    event_bitmap_key = f"seats:{req.event_id}:bitmap"
-
-    # Build deterministic seat indexes for Redis bitmap sync.
-    seat_order = sorted(
-        seat_availability_map.keys(), key=lambda sid: _parse_seat_id(sid)
-    )
-    seat_index_map = {seat_id: idx for idx, seat_id in enumerate(seat_order)}
 
     # Parse and validate every requested seat before mutating state.
     normalized_seats = []
@@ -501,71 +549,99 @@ async def reserve(
             raise HTTPException(status_code=400, detail=f"Invalid seat id: {seat_id}")
 
         normalized = f"{row}{col}"
-        if normalized not in seat_availability_map:
-            raise HTTPException(
-                status_code=400, detail=f"Invalid seat for venue: {seat_id}"
-            )
-        if seat_availability_map.get(normalized) is None:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Seat availability map missing seat: {normalized}",
-            )
-        elif seat_availability_map.get(normalized) == 1:
-            raise HTTPException(
-                status_code=409, detail=f"Seat already reserved: {normalized}"
-            )
-        normalized_seats.append((normalized, row, col))
+        normalized_seats.append(normalized)
 
     # Prevent duplicate seats within a single request.
-    normalized_ids = [seat[0] for seat in normalized_seats]
-    if len(normalized_ids) != len(set(normalized_ids)):
+    if len(normalized_seats) != len(set(normalized_seats)):
         raise HTTPException(status_code=400, detail="Duplicate seats in selected_seats")
 
-    # Apply reservation to DB map; sync Redis bitmap as best effort.
-    for normalized, row, col in normalized_seats:
-        seat_availability_map[normalized] = 1
-        reserved_seat_ids.append(normalized)
-        seats.append(normalized)
-        try:
-            # Keep allocator bitmap aligned with DB state.
-            seat_idx = seat_index_map.get(normalized)
-            if seat_idx is not None:
-                await redis_client.setbit(event_bitmap_key, seat_idx, 1)
-        except Exception:
-            # DB remains the source of truth if Redis update fails.
-            pass
-
-    # Persist updated seat availability for the event.
-    for seat_id in reserved_seat_ids:
-        seat_availability_map[seat_id] = 1
+    conn = database_pool.get_connection()
+    cursor = conn.cursor(dictionary=True)
+    event_row = None
     try:
-        execute_query(
-            database_pool,
-            "UPDATE events SET seat_availability_map = %s WHERE event_id = %s",
-            (json.dumps(seat_availability_map), req.event_id),
+        conn.start_transaction()
+
+        cursor.execute(
+            "SELECT event_id, venue, closed FROM events WHERE event_id = %s FOR UPDATE",
+            (req.event_id,),
         )
-    except Exception as e:
-        print(f"Warning: could not update seat_availability_map: {e}")
+        event_row = cursor.fetchone()
+        if not event_row:
+            raise HTTPException(status_code=404, detail="Event not found")
+        if int(event_row.get("closed") or 0) == 1:
+            raise HTTPException(status_code=409, detail="Event is closed")
 
-    expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
+        seat_placeholders = ", ".join(["%s"] * len(normalized_seats))
+        cursor.execute(
+            f"""SELECT seat_id, occupied FROM seats
+                WHERE event_id = %s AND seat_id IN ({seat_placeholders})
+                FOR UPDATE""",
+            (req.event_id, *normalized_seats),
+        )
+        seat_rows = cursor.fetchall()
 
-    # Store reservation details in MySQL for downstream payment/booking flow.
-    try:
-        execute_query(
-            database_pool,
-            """INSERT INTO reservations (reservation_id, event_id, user_email, status, seats, expires_at) 
+        if len(seat_rows) != len(normalized_seats):
+            existing = {row["seat_id"] for row in seat_rows}
+            missing = [sid for sid in normalized_seats if sid not in existing]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid seat for venue: {missing[0]}",
+            )
+
+        seat_state = {row["seat_id"]: row for row in seat_rows}
+        for seat_id in normalized_seats:
+            occupied = int(seat_state[seat_id].get("occupied") or 0)
+            if occupied == 1:
+                raise HTTPException(
+                    status_code=409, detail=f"Seat already reserved: {seat_id}"
+                )
+
+        cursor.executemany(
+            """UPDATE seats
+               SET occupied = 1, reservation_id = %s
+               WHERE event_id = %s AND seat_id = %s""",
+            [(reservation_id, req.event_id, seat_id) for seat_id in normalized_seats],
+        )
+
+        cursor.execute(
+            """INSERT INTO reservations (reservation_id, event_id, user_email, status, seats, expires_at)
                VALUES (%s, %s, %s, %s, %s, %s)""",
             (
                 reservation_id,
                 req.event_id,
                 user_email,
                 "reserved",
-                json.dumps(seats),
+                json.dumps(normalized_seats),
                 datetime.fromtimestamp(expires_at, tz=timezone.utc),
             ),
         )
+
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
     except Exception as e:
-        print(f"Error storing reservation in MySQL: {e}")
+        conn.rollback()
+        print(f"Error reserving seats: {e}")
+        raise HTTPException(status_code=500, detail="could not reserve seats")
+    finally:
+        cursor.close()
+        conn.close()
+
+    # Best-effort Redis bitmap sync after DB commit.
+    seats = list(normalized_seats)
+    event_bitmap_key = f"seats:{req.event_id}:bitmap"
+    seat_index_map = build_seat_index_map(venues_config.get(event_row.get("venue")))
+    for seat_id in seats:
+        try:
+            seat_idx = seat_index_map.get(seat_id)
+            if seat_idx is not None:
+                await redis_client.setbit(event_bitmap_key, seat_idx, 1)
+        except Exception:
+            # DB remains the source of truth if Redis update fails.
+            pass
+
+    expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
 
     # Enqueue confirmation notification.
     notification = {
