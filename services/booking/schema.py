@@ -8,3 +8,9 @@ class ReserveRequest(BaseModel):
     num_seats: int
     preferred_rows: Optional[List[str]] = None
     user_id: Optional[str] = None
+
+
+class CreateEventRequest(BaseModel):
+    name: str
+    venue: str
+    start_time: str

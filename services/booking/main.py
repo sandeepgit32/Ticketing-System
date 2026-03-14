@@ -2,17 +2,26 @@ import json
 import os
 import time
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
 import mysql.connector
 import redis.asyncio as redis
 import yaml
-from db_utils import execute_query, fetch_all, fetch_one
+from db_utils import execute_query, fetch_all, fetch_one, require_db_pool
 from fastapi import FastAPI, Header, HTTPException, Request
 from mysql.connector import pooling
-from schema import ReserveRequest
+from schema import CreateEventRequest, ReserveRequest
+
+
+def _load_json_map(value):
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return {}
+    return value if isinstance(value, dict) else {}
 
 
 def required_env(key: str, cast=str):
@@ -95,6 +104,44 @@ def load_venue_config(cfg_path: Optional[str] = None) -> None:
         print("Loaded venue_config.yaml")
     except Exception as e:
         print(f"Warning: could not load venue_config.yaml: {e}")
+
+
+def build_default_seat_maps(venue_cfg: dict) -> tuple[dict, dict]:
+    """Build default availability + price maps for a venue.
+
+    Availability is initialized to 0 for all seats and pricing comes from the
+    venue configuration's per-row pricing.
+
+    Args:
+        venue_cfg: The venue configuration dict (from `venues_config`).
+
+    Returns:
+        A tuple `(availability_map, price_map)`.
+
+    Raises:
+        HTTPException: if the venue configuration is missing required fields.
+    """
+
+    rows_list = venue_cfg.get("rows") or []
+    cols = venue_cfg.get("columns") or []
+    if not cols or not rows_list:
+        raise HTTPException(
+            status_code=500, detail="Venue configuration missing columns or rows"
+        )
+
+    seat_price_by_row = venue_cfg.get("seat_price", {}) or {}
+
+    seat_availability_map = {}
+    seat_price_map = {}
+
+    for r in rows_list:
+        row_price = seat_price_by_row.get(r, 0)
+        for c in cols:
+            key = f"{r}{c}"
+            seat_availability_map[key] = 0
+            seat_price_map[key] = float(row_price) if row_price is not None else 0
+
+    return seat_availability_map, seat_price_map
 
 
 @app.on_event("startup")
@@ -180,42 +227,41 @@ async def list_events():
     normalizes timestamps to ISO 8601 dates.
     """
     events = []
-    if db_pool:
-        try:
-            rows_db = fetch_all(
-                db_pool, "SELECT event_id, name, start_time, venue FROM events"
-            )
 
-            for event in rows_db:
-                venue_name = event.get("venue")
-                start_time = event.get("start_time")
-                try:
-                    if isinstance(start_time, (datetime,)):
-                        start_iso = start_time.isoformat()
-                    else:
-                        start_iso = str(start_time)
-                except Exception:
-                    raise HTTPException(
-                        status_code=500, detail="invalid start_time format in database"
-                    )
+    # Ensure DB is available
+    database_pool = require_db_pool(db_pool)
 
-                # Only include minimal fields for the list endpoint
-                date_only = start_iso.split("T")[0] if "T" in start_iso else start_iso
-                events.append(
-                    {
-                        "event_id": event.get("event_id"),
-                        "name": event.get("name"),
-                        "venue": venue_name,
-                        "date": date_only,
-                    }
+    try:
+        rows_db = fetch_all(
+            database_pool, "SELECT event_id, name, start_time, venue FROM events"
+        )
+
+        for event in rows_db:
+            venue_name = event.get("venue")
+            start_time = event.get("start_time")
+            try:
+                if isinstance(start_time, (datetime,)):
+                    start_iso = start_time.isoformat()
+                else:
+                    start_iso = str(start_time)
+            except Exception:
+                raise HTTPException(
+                    status_code=500, detail="invalid start_time format in database"
                 )
-        except Exception as e:
-            print(f"Warning: could not query events table for list: {e}")
-            raise HTTPException(status_code=500, detail="could not fetch events")
-    else:
-        # No database connection; cannot list events
-        print("Error: database unavailable, cannot fetch events list")
-        raise HTTPException(status_code=503, detail="database unavailable")
+
+            # Only include minimal fields for the list endpoint
+            date_only = start_iso.split("T")[0] if "T" in start_iso else start_iso
+            events.append(
+                {
+                    "event_id": event.get("event_id"),
+                    "name": event.get("name"),
+                    "venue": venue_name,
+                    "date": date_only,
+                }
+            )
+    except Exception as e:
+        print(f"Warning: could not query events table for list: {e}")
+        raise HTTPException(status_code=500, detail="could not fetch events")
 
     return {"events": events}
 
@@ -226,17 +272,16 @@ async def get_event(event_id: str):
 
     The venue layout is inferred from the loaded venue configuration.
     """
-    # Try to fetch event from DB if available
+    # Ensure DB is available and fetch event
+    database_pool = require_db_pool(db_pool)
+
     event = None
-    if db_pool:
-        try:
-            event = fetch_one(
-                db_pool, "SELECT * FROM events WHERE event_id = %s", (event_id,)
-            )
-        except Exception as e:
-            print(f"Warning: could not query events table: {e}")
-    else:
-        raise HTTPException(status_code=503, detail="database unavailable")
+    try:
+        event = fetch_one(
+            database_pool, "SELECT * FROM events WHERE event_id = %s", (event_id,)
+        )
+    except Exception as e:
+        print(f"Warning: could not query events table: {e}")
 
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
@@ -269,28 +314,8 @@ async def get_event(event_id: str):
         )
 
     # Build seat-level availability and pricing maps (keyed by seat ID like "A1").
-    # These must come from the event row in DB; do not synthesize defaults from config.
-    seat_availability_map = {}
-    seat_price_map = {}
-
-    # Load maps from DB (may be stored as JSON string or JSON column)
-    stored_avail = event.get("seat_availability_map")
-    if isinstance(stored_avail, str):
-        try:
-            stored_avail = json.loads(stored_avail)
-        except Exception:
-            stored_avail = None
-    if isinstance(stored_avail, dict):
-        seat_availability_map = stored_avail
-
-    stored_price = event.get("seat_price_map")
-    if isinstance(stored_price, str):
-        try:
-            stored_price = json.loads(stored_price)
-        except Exception:
-            stored_price = None
-    if isinstance(stored_price, dict):
-        seat_price_map = stored_price
+    seat_availability_map = _load_json_map(event.get("seat_availability_map"))
+    seat_price_map = _load_json_map(event.get("seat_price_map"))
 
     # normalize start_time to isoformat
     start_time = event.get("start_time")
@@ -313,6 +338,54 @@ async def get_event(event_id: str):
         "seat_availability_map": seat_availability_map,
         "seat_price_map": seat_price_map,
     }
+
+
+@app.post("/events", status_code=201)
+async def create_event(req: CreateEventRequest):
+    """Create a new event record.
+
+    This endpoint stores event metadata in MySQL, including optional per-seat
+    availability/pricing maps. The maps must be provided by the caller and are
+    stored as JSON in the database.
+    """
+    # Generate event_id if not provided
+    event_id = str(uuid.uuid4())
+
+    # Ensure venue exists in config (required for later lookups)
+    if req.venue and venues_config.get(req.venue) is None:
+        raise HTTPException(status_code=400, detail="Unknown venue")
+
+    # Persist to DB
+    database_pool = require_db_pool(db_pool)
+
+    # Build default seat maps from venue config
+    # - availability: all seats closed (0)
+    # - pricing: derived from per-row pricing in config
+    venue_cfg = venues_config.get(req.venue)
+    seat_availability_map, seat_price_map = (
+        build_default_seat_maps(venue_cfg) if venue_cfg else ({}, {})
+    )
+
+    try:
+        execute_query(
+            database_pool,
+            """INSERT INTO events (event_id, name, venue, start_time, seat_availability_map, seat_price_map)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (
+                event_id,
+                req.name,
+                req.venue,
+                req.start_time,
+                json.dumps(seat_availability_map),
+                json.dumps(seat_price_map),
+            ),
+        )
+    except Exception as e:
+        # Unique key violation or other insert errors
+        print(f"Error inserting event: {e}")
+        raise HTTPException(status_code=500, detail="could not create event")
+
+    return {"event_id": event_id}
 
 
 @app.post("/bookings/reserve", status_code=201)
@@ -359,30 +432,33 @@ async def reserve(
     reservation_id = str(uuid.uuid4())
     expires_at = int(time.time()) + RESERVATION_TTL_SECONDS
 
-    # Determine seats per row for event/venue (must match venue config)
-    seats_per_row = None
-    if db_pool:
-        try:
-            evt = fetch_one(
-                db_pool, "SELECT venue FROM events WHERE event_id = %s", (req.event_id,)
-            )
-            if not evt:
-                raise HTTPException(status_code=404, detail="Event not found")
+    # Ensure DB is available and determine seats per row for event/venue
+    database_pool = require_db_pool(db_pool)
 
-            venue_cfg = venues_config.get(evt.get("venue"))
-            if venue_cfg:
-                cols = venue_cfg.get("columns")
-                if cols:
-                    seats_per_row = len(cols)
-                    if row not in venue_cfg.get("rows", []):
-                        raise HTTPException(
-                            status_code=400,
-                            detail="Invalid row for event venue",
-                        )
-        except HTTPException:
-            raise
-        except Exception as e:
-            print(f"Warning: could not determine venue configuration for event: {e}")
+    seats_per_row = None
+    try:
+        evt = fetch_one(
+            database_pool,
+            "SELECT venue FROM events WHERE event_id = %s",
+            (req.event_id,),
+        )
+        if not evt:
+            raise HTTPException(status_code=404, detail="Event not found")
+
+        venue_cfg = venues_config.get(evt.get("venue"))
+        if venue_cfg:
+            cols = venue_cfg.get("columns")
+            if cols:
+                seats_per_row = len(cols)
+                if row not in venue_cfg.get("rows", []):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Invalid row for event venue",
+                    )
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Warning: could not determine venue configuration for event: {e}")
 
     if seats_per_row is None:
         raise HTTPException(
@@ -414,24 +490,51 @@ async def reserve(
     seats = json.loads(res[1])
     expires_at_iso = datetime.fromtimestamp(int(res[2]), tz=timezone.utc).isoformat()
 
-    # Store reservation in MySQL
-    if db_pool:
-        try:
+    # Update event seat availability map (mark reserved seats)
+    try:
+        event_row = fetch_one(
+            database_pool,
+            "SELECT seat_availability_map FROM events WHERE event_id = %s",
+            (req.event_id,),
+        )
+        if event_row:
+            seat_map = event_row.get("seat_availability_map")
+            if isinstance(seat_map, str):
+                try:
+                    seat_map = json.loads(seat_map)
+                except Exception:
+                    seat_map = {}
+            if not isinstance(seat_map, dict):
+                seat_map = {}
+
+            for seat in seats:
+                seat_map[seat] = 1
+
             execute_query(
-                db_pool,
-                """INSERT INTO reservations (reservation_id, event_id, user_id, status, seats, expires_at) 
-                   VALUES (%s, %s, %s, %s, %s, %s)""",
-                (
-                    reservation_id,
-                    req.event_id,
-                    user_id,
-                    "reserved",
-                    json.dumps(seats),
-                    datetime.fromtimestamp(int(res[2]), tz=timezone.utc),
-                ),
+                database_pool,
+                "UPDATE events SET seat_availability_map = %s WHERE event_id = %s",
+                (json.dumps(seat_map), req.event_id),
             )
-        except Exception as e:
-            print(f"Error storing reservation in MySQL: {e}")
+    except Exception as e:
+        print(f"Warning: could not update seat_availability_map: {e}")
+
+    # Store reservation in MySQL
+    try:
+        execute_query(
+            database_pool,
+            """INSERT INTO reservations (reservation_id, event_id, user_id, status, seats, expires_at) 
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (
+                reservation_id,
+                req.event_id,
+                user_id,
+                "reserved",
+                json.dumps(seats),
+                datetime.fromtimestamp(int(res[2]), tz=timezone.utc),
+            ),
+        )
+    except Exception as e:
+        print(f"Error storing reservation in MySQL: {e}")
 
     # Publish notification
     notification = {
@@ -509,67 +612,66 @@ async def payments_webhook(request: Request):
         booking_id = str(uuid.uuid4())
         reservation_id = payload.get("intent_id", "unknown")
 
+        # Ensure DB is available
+        database_pool = require_db_pool(db_pool)
+
         # Store booking in MySQL
-        if db_pool:
-            try:
-                # Get reservation details
-                reservation = fetch_one(
-                    db_pool,
-                    "SELECT * FROM reservations WHERE reservation_id = %s",
-                    (reservation_id,),
+        try:
+            # Get reservation details
+            reservation = fetch_one(
+                database_pool,
+                (reservation_id,),
+            )
+
+            if reservation:
+                # Create booking
+                execute_query(
+                    database_pool,
+                    """INSERT INTO bookings (booking_id, reservation_id, event_id, user_id, status, seats, payment_status, total_amount) 
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        booking_id,
+                        reservation_id,
+                        reservation["event_id"],
+                        reservation["user_id"],
+                        "confirmed",
+                        reservation["seats"],
+                        "completed",
+                        100.00,
+                    ),
                 )
 
-                if reservation:
-                    # Create booking
-                    execute_query(
-                        db_pool,
-                        """INSERT INTO bookings (booking_id, reservation_id, event_id, user_id, status, seats, payment_status, total_amount) 
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
-                        (
-                            booking_id,
-                            reservation_id,
-                            reservation["event_id"],
-                            reservation["user_id"],
-                            "confirmed",
-                            reservation["seats"],
-                            "completed",
-                            100.00,
-                        ),
-                    )
+                # Update reservation status
+                execute_query(
+                    database_pool,
+                    "UPDATE reservations SET status = %s, confirmed_at = %s WHERE reservation_id = %s",
+                    ("confirmed", datetime.now(timezone.utc), reservation_id),
+                )
 
-                    # Update reservation status
-                    execute_query(
-                        db_pool,
-                        "UPDATE reservations SET status = %s, confirmed_at = %s WHERE reservation_id = %s",
-                        ("confirmed", datetime.now(timezone.utc), reservation_id),
-                    )
+                # Get user email (simplified - would need to join with users table)
+                seats = (
+                    json.loads(reservation["seats"])
+                    if isinstance(reservation["seats"], str)
+                    else reservation["seats"]
+                )
 
-                    # Get user email (simplified - would need to join with users table)
-                    seats = (
-                        json.loads(reservation["seats"])
-                        if isinstance(reservation["seats"], str)
-                        else reservation["seats"]
-                    )
+                # Publish success notification
+                notification = {
+                    "type": "payment_confirmed",
+                    "data": {
+                        "user_email": "user@example.com",  # Would get from user lookup
+                        "booking_id": booking_id,
+                        "reservation_id": reservation_id,
+                        "event_id": reservation["event_id"],
+                        "event_name": f"Event {reservation['event_id']}",
+                        "seats": seats,
+                        "total_amount": 100.00,
+                    },
+                }
+                await redis_client.lpush(NOTIFICATION_QUEUE, json.dumps(notification))
 
-                    # Publish success notification
-                    notification = {
-                        "type": "payment_confirmed",
-                        "data": {
-                            "user_email": "user@example.com",  # Would get from user lookup
-                            "booking_id": booking_id,
-                            "reservation_id": reservation_id,
-                            "event_id": reservation["event_id"],
-                            "event_name": f"Event {reservation['event_id']}",
-                            "seats": seats,
-                            "total_amount": 100.00,
-                        },
-                    }
-                    await redis_client.lpush(
-                        NOTIFICATION_QUEUE, json.dumps(notification)
-                    )
-
-            except Exception as e:
-                print(f"Error processing payment webhook: {e}")
+        except Exception as e:
+            print(f"Error processing payment webhook: {e}")
 
     elif event == "capture_failed":
         # Payment failed - publish notification
