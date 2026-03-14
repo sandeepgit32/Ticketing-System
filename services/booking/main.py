@@ -16,12 +16,28 @@ from schema import CreateEventRequest, ReserveRequest
 
 
 def _load_json_map(value):
+    """Helper to load a JSON map from a DB field, with error handling."""
     if isinstance(value, str):
         try:
             value = json.loads(value)
         except Exception:
             return {}
     return value if isinstance(value, dict) else {}
+
+
+def _parse_seat_id(seat_id: str) -> tuple[str, int]:
+    """
+    Parse a seat ID into its row and column components.
+    Example: "A12" -> ("A", 12)
+    """
+    i = 0
+    while i < len(seat_id) and seat_id[i].isalpha():
+        i += 1
+    row = seat_id[:i].upper()
+    col_raw = seat_id[i:]
+    if not row or not col_raw.isdigit():
+        raise ValueError(f"invalid seat id: {seat_id}")
+    return row, int(col_raw)
 
 
 def required_env(key: str, cast=str):
@@ -394,33 +410,28 @@ async def reserve(
     idempotency_key: Optional[str] = Header(None),
     x_user_email: Optional[str] = Header(None),
 ):
-    """Reserve seats for an event.
+    """Reserve explicit seats for an event.
 
-        This endpoint supports two reservation modes:
-            - contiguous mode via `num_seats`
-            - explicit mode via `preferred_seats` (e.g. ["A1", "B2"])
+    This endpoint reserves seats passed via `selected_seats`
+    (for example: ["A1", "B2"]).
 
-        It records the reservation in MySQL and updates event seat availability.
+    It updates the event seat availability map and stores the reservation in MySQL.
 
-    - `idempotency_key` is optional and can be used to deduplicate requests.
-    - `x_user_email` is used for tracking and notifications. Auth is currently enforced in the API Gateway, and the booking service trusts a forwarded X-User-Email header instead of validating JWT itself.
+    - `idempotency_key`: Optional key used to deduplicate retries.
+    - `x_user_email`: Caller identity used for reservation ownership and notifications.
+      Auth is enforced in the API Gateway; this service trusts forwarded identity headers.
     """
-    has_num_seats = req.num_seats is not None
-    has_preferred_seats = bool(req.preferred_seats)
-    if has_num_seats == has_preferred_seats:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide exactly one of num_seats or preferred_seats",
-        )
-    if has_num_seats and req.num_seats < 1:
-        raise HTTPException(status_code=400, detail="num_seats must be >= 1")
+    # Validate request payload shape before any external I/O.
+    selected_seats = req.selected_seats or []
+    if not selected_seats:
+        raise HTTPException(status_code=400, detail="selected_seats must not be empty")
 
-    # Email is the only user identity accepted by this endpoint.
+    # User email is the only accepted identity for this endpoint.
     user_email = x_user_email
     if not user_email:
         raise HTTPException(status_code=400, detail="x_user_email is required")
 
-    # Idempotency: if provided, attempt to reuse the previous response
+    # Fast idempotency path: return a cached response for repeated requests.
     idemp_key = None
     if idempotency_key:
         idemp_key = f"idempotency:{idempotency_key}"
@@ -429,150 +440,116 @@ async def reserve(
             if existing:
                 return json.loads(existing)
         except Exception:
-            # best effort only; do not block reservation flow
+            # Best-effort cache lookup; never block reservation flow.
             pass
 
     reservation_id = str(uuid.uuid4())
     expires_at = int(time.time()) + RESERVATION_TTL_SECONDS
 
-    # Ensure DB is available and determine seats per row for event/venue
+    # Load the event's current seat availability map from DB.
     database_pool = require_db_pool(db_pool)
 
-    seats_per_row = None
-    rows_list = []
-    cols = []
+    seat_availability_map = {}
+
     try:
-        evt = fetch_one(
+        event = fetch_one(
             database_pool,
-            "SELECT venue FROM events WHERE event_id = %s",
+            "SELECT seat_availability_map FROM events WHERE event_id = %s",
             (req.event_id,),
         )
-        if not evt:
+        if not event:
             raise HTTPException(status_code=404, detail="Event not found")
-
-        venue_cfg = venues_config.get(evt.get("venue"))
-        if venue_cfg:
-            rows_list = venue_cfg.get("rows") or []
-            cols = venue_cfg.get("columns") or []
-            if cols:
-                seats_per_row = len(cols)
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Warning: could not determine venue configuration for event: {e}")
+        print(f"Warning: could not query event for reservation: {e}")
 
-    if seats_per_row is None:
+    # This map is used for both conflict checks and persistence.
+    seat_availability_map = _load_json_map(event.get("seat_availability_map"))
+    if not seat_availability_map:
         raise HTTPException(
-            status_code=500, detail="Venue configuration not found for event"
+            status_code=500, detail="Seat availability map not found for event"
         )
 
-    # Load current event seat map once and update it for either reservation mode.
-    event_row = fetch_one(
-        database_pool,
-        "SELECT seat_availability_map FROM events WHERE event_id = %s",
-        (req.event_id,),
-    )
-    seat_map = _load_json_map(
-        event_row.get("seat_availability_map") if event_row else {}
-    )
+    # Validate seat states can be parsed as integers; keep flow resilient.
+    for seat_id, state in seat_availability_map.items():
+        try:
+            state = int(state)
+        except Exception as e:
+            print(f"Warning: invalid seat state for {seat_id}: {state}, error: {e}")
+            state = 0
 
     seats = []
     reserved_seat_ids = []
+    event_bitmap_key = f"seats:{req.event_id}:bitmap"
 
-    if has_num_seats:
-        # Attempt contiguous reservation row-by-row until one succeeds.
-        redis_result = None
-        for row in rows_list:
-            key = f"seats:{req.event_id}:row:{row}:bitmap"
-            try:
-                redis_result = await redis_client.evalsha(
-                    reserve_sha,
-                    1,
-                    key,
-                    req.num_seats,
-                    reservation_id,
-                    req.event_id,
-                    row,
-                    user_email,
-                    0,
-                    RESERVATION_TTL_SECONDS,
-                    expires_at,
-                    seats_per_row,
-                )
-                break
-            except redis.exceptions.ResponseError as e:
-                if "NO_BLOCK" in str(e):
-                    continue
-                raise
+    # Build deterministic seat indexes for Redis bitmap sync.
+    seat_order = sorted(
+        seat_availability_map.keys(), key=lambda sid: _parse_seat_id(sid)
+    )
+    seat_index_map = {seat_id: idx for idx, seat_id in enumerate(seat_order)}
 
-        if redis_result is None:
-            raise HTTPException(status_code=409, detail="No contiguous block available")
+    # Parse and validate every requested seat before mutating state.
+    normalized_seats = []
+    for seat_id in selected_seats:
+        if not isinstance(seat_id, str) or not seat_id:
+            raise HTTPException(status_code=400, detail="Invalid seat id")
 
-        # redis_result = [reservation_id, seats_json, expiry_epoch]
-        seats = json.loads(redis_result[1])
-        expires_at = int(redis_result[2])
-        reserved_seat_ids = [
-            f"{seat.get('row')}{seat.get('index')}"
-            for seat in seats
-            if isinstance(seat, dict)
-        ]
-    else:
-        # Explicit-seat reservation path (supports seats across rows)
-        normalized_seats = []
-        for seat_id in req.preferred_seats:
-            if not isinstance(seat_id, str) or not seat_id:
-                raise HTTPException(status_code=400, detail="Invalid seat id")
+        try:
+            row, col = _parse_seat_id(seat_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid seat id: {seat_id}")
 
-            i = 0
-            while i < len(seat_id) and seat_id[i].isalpha():
-                i += 1
-            row = seat_id[:i]
-            col_raw = seat_id[i:]
-            if not row or not col_raw.isdigit():
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid seat id: {seat_id}"
-                )
+        normalized = f"{row}{col}"
+        if normalized not in seat_availability_map:
+            raise HTTPException(
+                status_code=400, detail=f"Invalid seat for venue: {seat_id}"
+            )
+        if seat_availability_map.get(normalized) is None:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Seat availability map missing seat: {normalized}",
+            )
+        elif seat_availability_map.get(normalized) == 1:
+            raise HTTPException(
+                status_code=409, detail=f"Seat already reserved: {normalized}"
+            )
+        normalized_seats.append((normalized, row, col))
 
-            col = int(col_raw)
-            if row not in rows_list or col not in cols:
-                raise HTTPException(
-                    status_code=400, detail=f"Invalid seat for venue: {seat_id}"
-                )
+    # Prevent duplicate seats within a single request.
+    normalized_ids = [seat[0] for seat in normalized_seats]
+    if len(normalized_ids) != len(set(normalized_ids)):
+        raise HTTPException(status_code=400, detail="Duplicate seats in selected_seats")
 
-            normalized = f"{row}{col}"
-            if seat_map.get(normalized, 0) == 1:
-                raise HTTPException(
-                    status_code=409, detail=f"Seat already reserved: {normalized}"
-                )
-            normalized_seats.append((normalized, row, col))
+    # Apply reservation to DB map; sync Redis bitmap as best effort.
+    for normalized, row, col in normalized_seats:
+        seat_availability_map[normalized] = 1
+        reserved_seat_ids.append(normalized)
+        seats.append(normalized)
+        try:
+            # Keep allocator bitmap aligned with DB state.
+            seat_idx = seat_index_map.get(normalized)
+            if seat_idx is not None:
+                await redis_client.setbit(event_bitmap_key, seat_idx, 1)
+        except Exception:
+            # DB remains the source of truth if Redis update fails.
+            pass
 
-        # Mark explicit seats reserved and best-effort sync Redis row bitmaps.
-        for normalized, row, col in normalized_seats:
-            seat_map[normalized] = 1
-            reserved_seat_ids.append(normalized)
-            seats.append({"row": row, "index": col})
-            try:
-                bitmap_key = f"seats:{req.event_id}:row:{row}:bitmap"
-                await redis_client.setbit(bitmap_key, col - 1, 1)
-            except Exception:
-                # DB map is source of truth; Redis sync is best effort.
-                pass
-
-    # Persist seat map updates from both paths.
+    # Persist updated seat availability for the event.
     for seat_id in reserved_seat_ids:
-        seat_map[seat_id] = 1
+        seat_availability_map[seat_id] = 1
     try:
         execute_query(
             database_pool,
             "UPDATE events SET seat_availability_map = %s WHERE event_id = %s",
-            (json.dumps(seat_map), req.event_id),
+            (json.dumps(seat_availability_map), req.event_id),
         )
     except Exception as e:
         print(f"Warning: could not update seat_availability_map: {e}")
 
     expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
 
-    # Store reservation in MySQL
+    # Store reservation details in MySQL for downstream payment/booking flow.
     try:
         execute_query(
             database_pool,
@@ -590,7 +567,7 @@ async def reserve(
     except Exception as e:
         print(f"Error storing reservation in MySQL: {e}")
 
-    # Publish notification
+    # Enqueue confirmation notification.
     notification = {
         "type": "reservation_confirmed",
         "data": {
@@ -618,7 +595,7 @@ async def reserve(
                 idemp_key, json.dumps(response), ex=RESERVATION_TTL_SECONDS
             )
         except Exception:
-            # Best-effort cache; do not break the reservation flow
+            # Best-effort idempotency cache write.
             pass
 
     return response

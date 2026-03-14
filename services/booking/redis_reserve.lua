@@ -14,10 +14,9 @@ Inputs:
   ARGV[6]  - amount_cents
   ARGV[7]  - ttl_seconds (how long the reservation key should live)
   ARGV[8]  - expiry_epoch_seconds (when the reservation expires)
-  ARGV[9]  - seats_per_row (length of the bitmap string)
 
 Behavior:
-  * Loads or initializes the bitmap, searches for a run of zeroes of the
+  * Loads a pre-seeded bitmap, searches for a run of zeroes of the
     requested length, picks a random candidate for fairness, flips those
     bits to ones and stores the updated bitmap.
   * Constructs a JSON array of the reserved seat coordinates.
@@ -38,7 +37,6 @@ Behavior:
 -- ARGV[6] = amount_cents
 -- ARGV[7] = ttl_seconds
 -- ARGV[8] = expiry_epoch_seconds
--- ARGV[9] = seats_per_row
 
 local key = KEYS[1]
 local num_seats = tonumber(ARGV[1])
@@ -49,11 +47,10 @@ local user_email = ARGV[5]
 local amount_cents = ARGV[6]
 local ttl_seconds = tonumber(ARGV[7])
 local expiry_epoch = tonumber(ARGV[8])
-local seats_per_row = tonumber(ARGV[9])
 
 local bmp = redis.call('GET', key)
 if not bmp then
-  bmp = string.rep('0', seats_per_row)
+  return {err='NO_BLOCK'}
 end
 
 local pattern = string.rep('0', num_seats)
