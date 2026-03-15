@@ -248,6 +248,58 @@ All requests should go through the **API Gateway** at `http://localhost:8000`
 
 ## Development
 
+### Data Flow
+
+The system is designed as a series of coordinated microservices; each step is owned by a single service and connected via the API Gateway and Redis queues.
+
+1. **Login / Register**
+   - The frontend calls `POST /auth/register` or `POST /auth/login` on the API Gateway.
+   - Auth Service validates credentials against MySQL, issues a JWT token, and returns it to the frontend.
+
+2. **View events**
+   - The frontend requests `GET /booking/events` via the API Gateway.
+   - Booking Service queries MySQL (`events`, `seats`) and returns event metadata and seat availability.
+
+3. **Select seats + reserve**
+   - The frontend submits `POST /booking/bookings/reserve` with the selected seat IDs and the user's JWT token.
+   - Booking Service generates a **reservation ID** (UUID) and an expiration timestamp.
+   - Booking Service calls a Redis Lua script to atomically reserve seats in a Redis bitmap and store reservation metadata (reservation ID, seat indexes, expiry).
+   - Booking Service then inserts a row into MySQL `reservations`:
+     - `reservation_id` (UUID)
+     - `event_id`
+     - `user_email` (from forwarded header)
+     - `status = reserved`
+     - `seats` (JSON list)
+     - `expires_at` (UTC timestamp)
+   - Booking Service publishes a notification message to Redis `queue:notifications` (type `reservation_confirmed`).
+
+4. **Payment**
+   - The frontend calls `POST /booking/payments/capture` with `reservation_id` and payment data.
+   - Booking Service forwards the request to the Payment Service (mock provider) and returns the response.
+
+5. **Payment webhook processing**
+   - Payment Service sends a webhook (`POST /payments/webhook`) back to Booking Service.
+   - Booking Service creates a **booking ID** (UUID) and inserts into MySQL `bookings`:
+     - `booking_id` (UUID)
+     - `reservation_id`
+     - `event_id`
+     - `user_email`
+     - `status = confirmed`
+     - `seats` (JSON list)
+     - `payment_status` (completed / failed)
+     - `total_amount`
+   - Booking Service updates the corresponding `reservations` row to `status = confirmed` (or `expired`/`failed`).
+   - Booking Service publishes a notification message to Redis `queue:notifications` (type `payment_confirmed` or `payment_failed`).
+
+6. **Notification delivery**
+   - Notification Service continuously consumes messages from `queue:notifications`.
+   - It builds an email based on the notification type and sends it via SMTP (Mailtrap by default).
+   - If SMTP credentials are not configured, it logs a mock email to stdout.
+
+7. **Expiration / cleanup**
+   - Booking Service runs a background expiry worker that scans Redis for expired reservations and releases seats.
+   - Expired reservations are also updated in MySQL and removed from Redis.
+
 ### Project Structure
 
 ```
