@@ -76,6 +76,41 @@ def _parse_seat_id(seat_id: str) -> tuple[str, int]:
     return row, int(col_raw)
 
 
+def _normalize_seat_ids(selected_seats: list) -> list[str]:
+    """Parse, normalise, and deduplicate a list of raw seat ID strings.
+
+    Each seat ID is validated to be a non-empty string, parsed into its row
+    letter(s) and column number via ``_parse_seat_id``, then reassembled into
+    a canonical upper-case form (e.g. ``"a1"`` → ``"A1"``).
+
+    Args:
+        selected_seats: Raw seat ID values from the request payload.
+
+    Returns:
+        List of normalised seat ID strings in the same order as the input,
+        with no duplicates.
+
+    Raises:
+        HTTPException(400): If any element is not a non-empty string, if any
+            seat ID cannot be parsed, or if the list contains duplicates after
+            normalisation.
+    """
+    normalized: list[str] = []
+    for seat_id in selected_seats:
+        if not isinstance(seat_id, str) or not seat_id:
+            raise HTTPException(status_code=400, detail="Invalid seat id")
+        try:
+            row, col = _parse_seat_id(seat_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail=f"Invalid seat id: {seat_id}")
+        normalized.append(f"{row}{col}")
+
+    if len(normalized) != len(set(normalized)):
+        raise HTTPException(status_code=400, detail="Duplicate seats in selected_seats")
+
+    return normalized
+
+
 def load_venue_config(cfg_path: Optional[str] = None) -> None:
     """Load venue configuration YAML into the global `venues_config`.
 
@@ -151,7 +186,26 @@ def build_default_seat_rows(venue_cfg: dict) -> list[tuple[str, int, float]]:
 
 
 def build_seat_index_map(venue_cfg: Optional[dict]) -> dict:
-    """Create deterministic seat index mapping used for Redis bitmap sync."""
+    """Build a deterministic mapping from seat ID to its zero-based bitmap index.
+
+    The index order is derived from ``build_default_seat_rows``, which iterates
+    rows then columns in the order they appear in the venue configuration.  The
+    same order must be used everywhere a seat bitmap is written or read so that
+    bit positions remain consistent across restarts and service instances.
+
+    Args:
+        venue_cfg: Venue configuration dict loaded from ``venues_config``.  If
+            ``None`` or empty, an empty mapping is returned without error.
+
+    Returns:
+        Dict mapping seat ID strings (e.g. ``"A1"``) to their integer bitmap
+        index.  Returns ``{}`` if the venue config is absent or invalid.
+
+    Example:
+        >>> venue_cfg = {"rows": ["A", "B"], "columns": [1, 2]}
+        >>> build_seat_index_map(venue_cfg)
+        {"A1": 0, "A2": 1, "B1": 2, "B2": 3}
+    """
     if not venue_cfg:
         return {}
     try:
@@ -162,6 +216,27 @@ def build_seat_index_map(venue_cfg: Optional[dict]) -> dict:
 
 
 def _reservation_redis_keys(event_id: str, reservation_id: str) -> tuple[str, str, str]:
+    """Return the three Redis key names used for a reservation.
+
+    All reservation-related Redis operations share a fixed key schema so that
+    the Lua scripts, the expiry worker, and the application layer all reference
+    the same keys without hard-coding strings in multiple places.
+
+    Keys:
+        - ``seats:<event_id>:bitmap`` — Per-event bitfield where each bit
+          represents one seat's occupied state (1 = held/booked, 0 = free).
+        - ``reservation:<reservation_id>`` — Redis hash storing metadata for a
+          single reservation (event_id, user_email, seat_indexes, expires_at).
+        - ``reservations:ttl`` — Sorted set used as a TTL index; each member is
+          a ``reservation_id`` and its score is the Unix expiry timestamp.
+
+    Args:
+        event_id: UUID of the event.
+        reservation_id: UUID of the reservation.
+
+    Returns:
+        Tuple of ``(bitmap_key, reservation_key, ttl_key)``.
+    """
     return (
         f"seats:{event_id}:bitmap",
         f"reservation:{reservation_id}",
@@ -172,7 +247,27 @@ def _reservation_redis_keys(event_id: str, reservation_id: str) -> tuple[str, st
 async def _release_redis_hold(
     event_id: str, reservation_id: str, seat_indexes: list[int]
 ) -> None:
-    """Best-effort release for Redis-held seats and reservation metadata."""
+    """Best-effort release of Redis seat bits and reservation metadata.
+
+    Invokes ``redis_release_explicit.lua`` via EVALSHA to atomically:
+
+    - Clear each bit in the event seat bitmap corresponding to ``seat_indexes``.
+    - Delete the reservation hash (``reservation:<reservation_id>``).
+    - Remove the reservation from the TTL sorted set (``reservations:ttl``).
+
+    All three operations are performed inside the Lua script so they cannot
+    leave the bitmap and the reservation hash in an inconsistent state.
+
+    Failures are intentionally swallowed: Redis is the speed layer and its
+    state will eventually be reconciled by the expiry worker on restart or
+    the next TTL scan.
+
+    Args:
+        event_id: UUID of the event whose bitmap needs updating.
+        reservation_id: UUID of the reservation being released.
+        seat_indexes: Zero-based bitmap indexes of the seats to free.  If the
+            list is empty the function returns immediately without any I/O.
+    """
     if not seat_indexes:
         return
 
@@ -195,7 +290,30 @@ async def _release_redis_hold(
 
 
 async def _release_expired_reservation_in_db(reservation_id: str) -> None:
-    """Expire a reservation in DB and free corresponding seats when still reserved."""
+    """Expire a reservation in MySQL and free its seats if still in `reserved` state.
+
+    Acquires a ``FOR UPDATE`` lock on the target reservation row to prevent
+    concurrent expiry from double-updating the same row.  Only proceeds with
+    seat-freeing and status update if the reservation is currently in
+    ``reserved`` status — rows already ``confirmed`` or ``expired`` are skipped
+    to avoid corrupting completed bookings.
+
+    Steps performed inside a single transaction:
+
+    1. Lock and fetch the reservation row.
+    2. Early-return (commit with no writes) if the row is missing or not in
+       ``reserved`` status.
+    3. Set ``occupied = 0`` and ``reservation_id = NULL`` on every seat that
+       was held by this reservation (matched by ``reservation_id`` to avoid
+       freeing seats already re-claimed by a newer reservation).
+    4. Update the reservation ``status`` to ``expired``.
+
+    Errors are caught and logged; the transaction is rolled back on failure so
+    the database is never left partially updated.
+
+    Args:
+        reservation_id: UUID of the reservation to expire.
+    """
     database_pool = require_db_pool(db_pool)
     conn = database_pool.get_connection()
     cursor = conn.cursor(dictionary=True)
@@ -256,7 +374,28 @@ async def _release_expired_reservation_in_db(reservation_id: str) -> None:
 
 
 async def _process_expired_reservation(reservation_id: str) -> None:
-    """Expire one reservation from Redis and DB."""
+    """Fully expire a single reservation from both Redis and MySQL.
+
+    Orchestrates the two-phase expiry for one reservation ID surfaced by the
+    TTL sorted set:
+
+    1. **Redis phase**: Read the reservation hash
+       (``reservation:<reservation_id>``) to retrieve ``event_id`` and
+       ``seat_indexes``.  If the hash is still present, invoke
+       ``_release_redis_hold`` to clear bitmap bits and remove the hash and TTL
+       entry atomically.  If the hash is already gone (e.g. it expired
+       naturally via Redis TTL), remove the stale entry from
+       ``reservations:ttl`` directly.
+
+    2. **DB phase**: Call ``_release_expired_reservation_in_db`` to free seat
+       rows and mark the reservation as ``expired`` in MySQL, regardless of
+       whether the Redis phase succeeded.
+
+    Errors in the Redis phase are caught so that the DB phase always runs.
+
+    Args:
+        reservation_id: UUID of the reservation to expire.
+    """
     reservation_key = f"reservation:{reservation_id}"
     try:
         payload = await redis_client.hgetall(reservation_key)
@@ -287,7 +426,22 @@ async def _process_expired_reservation(reservation_id: str) -> None:
 
 
 async def _reservation_expiry_worker(stop_event: asyncio.Event) -> None:
-    """Background worker that releases expired reservation holds."""
+    """Background task that continuously releases expired reservation holds.
+
+    Polls the ``reservations:ttl`` sorted set once per second, fetching up to
+    100 reservation IDs whose score (Unix expiry timestamp) is <= now.  Each
+    expired reservation is processed by ``_process_expired_reservation``, which
+    frees the Redis bitmap bits and marks the MySQL reservation as ``expired``.
+
+    The worker runs until ``stop_event`` is set (triggered by
+    ``shutdown_event``).  Any unhandled exception in the polling loop is caught
+    and logged, then the worker sleeps for one second before retrying, so a
+    transient Redis or DB error cannot permanently kill the background task.
+
+    Args:
+        stop_event: Asyncio event set by ``shutdown_event`` to signal the worker
+            to exit its loop cleanly.
+    """
     while not stop_event.is_set():
         try:
             now_epoch = int(time.time())
@@ -799,7 +953,8 @@ async def _reserve_seats_in_db(
     cursor = conn.cursor(dictionary=True)
     try:
         conn.start_transaction()
-
+        # Lock the event row first to prevent concurrent close operations while we're
+        # reserving seats.
         cursor.execute(
             "SELECT event_id, venue, closed FROM events WHERE event_id = %s FOR UPDATE",
             (event_id,),
@@ -811,6 +966,11 @@ async def _reserve_seats_in_db(
             raise HTTPException(status_code=409, detail="Event is closed")
 
         seat_placeholders = ", ".join(["%s"] * len(normalized_seats))
+        # The `SELECT ... FOR UPDATE` clause in MySQL is used within a transaction to select specific
+        # rows and apply an exclusive lock on those selected rows, preventing other transactions
+        # from modifying those rows until the current transaction is committed or rolled back.
+        # This is crucial for maintaining data integrity when multiple transactions might be trying
+        # to reserve the same seats concurrently.
         cursor.execute(
             f"""SELECT seat_id, occupied FROM seats
                 WHERE event_id = %s AND seat_id IN ({seat_placeholders})
@@ -834,14 +994,14 @@ async def _reserve_seats_in_db(
                 raise HTTPException(
                     status_code=409, detail=f"Seat already reserved: {seat_id}"
                 )
-
+        # All seats are available; proceed to update them and insert the reservation.
         cursor.executemany(
             """UPDATE seats
                SET occupied = 1, reservation_id = %s
                WHERE event_id = %s AND seat_id = %s""",
             [(reservation_id, event_id, seat_id) for seat_id in normalized_seats],
         )
-
+        # Insert the reservation row with status "reserved" and the computed expiry time.
         cursor.execute(
             """INSERT INTO reservations (reservation_id, event_id, user_email, status, seats, expires_at)
                VALUES (%s, %s, %s, %s, %s, %s)""",
@@ -913,22 +1073,8 @@ async def reserve(
     # Validate and reserve seats in Redis first, then persist in DB.
     database_pool = require_db_pool(db_pool)
 
-    # Parse and validate every requested seat before mutating state.
-    normalized_seats = []
-    for seat_id in selected_seats:
-        if not isinstance(seat_id, str) or not seat_id:
-            raise HTTPException(status_code=400, detail="Invalid seat id")
-
-        try:
-            row, col = _parse_seat_id(seat_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid seat id: {seat_id}")
-
-        normalized_seats.append(f"{row}{col}")
-
-    # Prevent duplicate seats within a single request.
-    if len(normalized_seats) != len(set(normalized_seats)):
-        raise HTTPException(status_code=400, detail="Duplicate seats in selected_seats")
+    # Parse, normalise, and deduplicate seat IDs before mutating any state.
+    normalized_seats = _normalize_seat_ids(selected_seats)
 
     # Read event metadata before Redis hold for seat-map validation.
     event_row = fetch_one(
@@ -942,14 +1088,14 @@ async def reserve(
         raise HTTPException(status_code=409, detail="Event is closed")
 
     venue_cfg = venues_config.get(event_row.get("venue"))
-    seat_index_map = build_seat_index_map(venue_cfg)
-    if not seat_index_map:
+    if not venue_cfg:
         raise HTTPException(
             status_code=500,
             detail="Venue configuration not found or invalid for event",
         )
+    seat_index_map = build_seat_index_map(venue_cfg)
 
-    seat_indexes = []
+    seat_indexes = [seat_index_map.get(seat_id) for seat_id in normalized_seats]
     for seat_id in normalized_seats:
         seat_idx = seat_index_map.get(seat_id)
         if seat_idx is None:
@@ -974,8 +1120,6 @@ async def reserve(
         await _release_redis_hold(req.event_id, reservation_id, seat_indexes)
         raise
 
-    seats = list(normalized_seats)
-
     expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
 
     # Enqueue confirmation notification.
@@ -986,7 +1130,7 @@ async def reserve(
             "reservation_id": reservation_id,
             "event_id": req.event_id,
             "event_name": f"Event {req.event_id}",
-            "seats": seats,
+            "seats": normalized_seats,
             "expires_at": expires_at_iso,
         },
     }
@@ -995,7 +1139,7 @@ async def reserve(
     response = {
         "reservation_id": reservation_id,
         "event_id": req.event_id,
-        "seats": seats,
+        "seats": normalized_seats,
         "expires_at": expires_at_iso,
         "status": "reserved",
     }
