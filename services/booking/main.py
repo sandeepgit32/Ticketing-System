@@ -685,6 +685,189 @@ async def close_event(event_id: str):
     return {"event_id": event_id, "status": "closed"}
 
 
+async def _apply_redis_seat_hold(
+    event_id: str,
+    reservation_id: str,
+    user_email: str,
+    expires_at: int,
+    seat_indexes: list[int],
+) -> None:
+    """Atomically mark seats as held in Redis using the explicit-seat Lua script.
+
+    Derives the three Redis keys required by the Lua script from `event_id` and
+    `reservation_id` (bitmap key, reservation hash key, TTL sorted-set key) and
+    invokes ``redis_reserve_explicit.lua`` via EVALSHA.
+
+    The Lua script checks each bit in the seat bitmap, sets the bits for all
+    requested `seat_indexes`, stores reservation metadata in a Redis hash, and
+    adds the reservation to the TTL sorted set — all within a single atomic
+    operation.  If any seat is already taken the script returns a ``SEAT_TAKEN``
+    error instead of partially applying the hold.
+
+    Args:
+        event_id: UUID of the target event; used to build Redis key names.
+        reservation_id: UUID generated for this reservation; used as the Redis
+            hash key suffix and stored inside the hash as the owner identifier.
+        user_email: Email address of the reserving user; stored in the Redis
+            reservation hash for downstream expiry and notification use.
+        expires_at: Unix timestamp (seconds) at which the hold should expire.
+            Passed to the Lua script to populate the TTL sorted set score.
+        seat_indexes: Zero-based integer indexes into the venue seat bitmap
+            corresponding to each requested seat.  The Lua script uses these to
+            set and check individual bitmap bits.
+
+    Raises:
+        HTTPException(409): If one or more seats are already held (either the
+            Lua script returns a non-OK status or raises ``SEAT_TAKEN``).
+        HTTPException(503): If an unexpected Redis error occurs (e.g. connection
+            failure, script not loaded).
+    """
+    bitmap_key, reservation_key, ttl_key = _reservation_redis_keys(
+        event_id, reservation_id
+    )
+    try:
+        hold_result = await redis_client.evalsha(
+            reserve_explicit_sha,
+            3,
+            bitmap_key,
+            reservation_key,
+            ttl_key,
+            reservation_id,
+            event_id,
+            user_email,
+            str(expires_at),
+            str(RESERVATION_TTL_SECONDS),
+            json.dumps(seat_indexes),
+        )
+        if not hold_result or hold_result[0] != "OK":
+            raise HTTPException(status_code=409, detail="Seats are no longer available")
+    except HTTPException:
+        raise
+    except Exception as e:
+        if "SEAT_TAKEN" in str(e):
+            raise HTTPException(status_code=409, detail="Seats are no longer available")
+        print(f"Error applying Redis hold: {e}")
+        raise HTTPException(status_code=503, detail="reservation service unavailable")
+
+
+async def _reserve_seats_in_db(
+    database_pool,
+    event_id: str,
+    reservation_id: str,
+    user_email: str,
+    normalized_seats: list[str],
+    expires_at: int,
+) -> None:
+    """Persist a seat reservation to MySQL within a single serialisable transaction.
+
+    Acquires a ``FOR UPDATE`` row lock on the event record to guard against
+    concurrent close operations, then acquires ``FOR UPDATE`` locks on every
+    requested seat row to prevent double-booking at the database level.
+
+    The transaction performs three writes:
+
+    1. Sets ``occupied = 1`` and ``reservation_id`` on each seat row.
+    2. Inserts a new row into the ``reservations`` table with status
+       ``"reserved"`` and the computed ``expires_at`` timestamp.
+
+    On any failure the transaction is rolled back before the exception is
+    re-raised, so the database is never left in a partially-written state.
+    The caller is responsible for releasing the corresponding Redis hold if
+    this function raises.
+
+    Args:
+        database_pool: Active MySQL connection pool (``mysql.connector`` pool).
+        event_id: UUID of the event being reserved.
+        reservation_id: UUID generated for this reservation; written to both
+            the ``seats`` and ``reservations`` tables.
+        user_email: Email address of the reserving user; stored in the
+            ``reservations`` row for ownership tracking and notifications.
+        normalized_seats: List of normalised seat IDs (e.g. ``["A1", "B2"]``)
+            whose rows will be locked and updated.
+        expires_at: Unix timestamp (seconds) stored as the reservation's
+            ``expires_at`` value; converted to a UTC datetime before insert.
+
+    Raises:
+        HTTPException(404): If the event row does not exist.
+        HTTPException(409): If the event is closed or any seat is already
+            occupied (``occupied = 1``) at the time of the DB lock.
+        HTTPException(400): If any seat ID in `normalized_seats` has no
+            corresponding row in the ``seats`` table for the event.
+        HTTPException(500): For any other unexpected database error.
+    """
+    conn = database_pool.get_connection()
+    cursor = conn.cursor(dictionary=True)
+    try:
+        conn.start_transaction()
+
+        cursor.execute(
+            "SELECT event_id, venue, closed FROM events WHERE event_id = %s FOR UPDATE",
+            (event_id,),
+        )
+        event_row = cursor.fetchone()
+        if not event_row:
+            raise HTTPException(status_code=404, detail="Event not found")
+        if int(event_row.get("closed") or 0) == 1:
+            raise HTTPException(status_code=409, detail="Event is closed")
+
+        seat_placeholders = ", ".join(["%s"] * len(normalized_seats))
+        cursor.execute(
+            f"""SELECT seat_id, occupied FROM seats
+                WHERE event_id = %s AND seat_id IN ({seat_placeholders})
+                FOR UPDATE""",
+            (event_id, *normalized_seats),
+        )
+        seat_rows = cursor.fetchall()
+
+        if len(seat_rows) != len(normalized_seats):
+            existing = {row["seat_id"] for row in seat_rows}
+            missing = [sid for sid in normalized_seats if sid not in existing]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid seat for venue: {missing[0]}",
+            )
+
+        seat_state = {row["seat_id"]: row for row in seat_rows}
+        for seat_id in normalized_seats:
+            occupied = int(seat_state[seat_id].get("occupied") or 0)
+            if occupied == 1:
+                raise HTTPException(
+                    status_code=409, detail=f"Seat already reserved: {seat_id}"
+                )
+
+        cursor.executemany(
+            """UPDATE seats
+               SET occupied = 1, reservation_id = %s
+               WHERE event_id = %s AND seat_id = %s""",
+            [(reservation_id, event_id, seat_id) for seat_id in normalized_seats],
+        )
+
+        cursor.execute(
+            """INSERT INTO reservations (reservation_id, event_id, user_email, status, seats, expires_at)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (
+                reservation_id,
+                event_id,
+                user_email,
+                "reserved",
+                json.dumps(normalized_seats),
+                datetime.fromtimestamp(expires_at, tz=timezone.utc),
+            ),
+        )
+
+        conn.commit()
+    except HTTPException:
+        conn.rollback()
+        raise
+    except Exception as e:
+        conn.rollback()
+        print(f"Error reserving seats: {e}")
+        raise HTTPException(status_code=500, detail="could not reserve seats")
+    finally:
+        cursor.close()
+        conn.close()
+
+
 @app.post("/bookings/reserve", status_code=201)
 async def reserve(
     req: ReserveRequest,
@@ -741,8 +924,7 @@ async def reserve(
         except ValueError:
             raise HTTPException(status_code=400, detail=f"Invalid seat id: {seat_id}")
 
-        normalized = f"{row}{col}"
-        normalized_seats.append(normalized)
+        normalized_seats.append(f"{row}{col}")
 
     # Prevent duplicate seats within a single request.
     if len(normalized_seats) != len(set(normalized_seats)):
@@ -776,113 +958,22 @@ async def reserve(
             )
         seat_indexes.append(seat_idx)
 
-    redis_hold_applied = False
-    bitmap_key, reservation_key, ttl_key = _reservation_redis_keys(
-        req.event_id, reservation_id
+    await _apply_redis_seat_hold(
+        req.event_id, reservation_id, user_email, expires_at, seat_indexes
     )
     try:
-        hold_result = await redis_client.evalsha(
-            reserve_explicit_sha,
-            3,
-            bitmap_key,
-            reservation_key,
-            ttl_key,
-            reservation_id,
+        await _reserve_seats_in_db(
+            database_pool,
             req.event_id,
+            reservation_id,
             user_email,
-            str(expires_at),
-            str(RESERVATION_TTL_SECONDS),
-            json.dumps(seat_indexes),
+            normalized_seats,
+            expires_at,
         )
-        if not hold_result or hold_result[0] != "OK":
-            raise HTTPException(status_code=409, detail="Seats are no longer available")
-        redis_hold_applied = True
-    except HTTPException:
+    except Exception:
+        await _release_redis_hold(req.event_id, reservation_id, seat_indexes)
         raise
-    except Exception as e:
-        # Lua returns seat contention as a deterministic application error.
-        if "SEAT_TAKEN" in str(e):
-            raise HTTPException(status_code=409, detail="Seats are no longer available")
-        print(f"Error applying Redis hold: {e}")
-        raise HTTPException(status_code=503, detail="reservation service unavailable")
 
-    conn = database_pool.get_connection()
-    cursor = conn.cursor(dictionary=True)
-    try:
-        conn.start_transaction()
-
-        cursor.execute(
-            "SELECT event_id, venue, closed FROM events WHERE event_id = %s FOR UPDATE",
-            (req.event_id,),
-        )
-        event_row = cursor.fetchone()
-        if not event_row:
-            raise HTTPException(status_code=404, detail="Event not found")
-        if int(event_row.get("closed") or 0) == 1:
-            raise HTTPException(status_code=409, detail="Event is closed")
-
-        seat_placeholders = ", ".join(["%s"] * len(normalized_seats))
-        cursor.execute(
-            f"""SELECT seat_id, occupied FROM seats
-                WHERE event_id = %s AND seat_id IN ({seat_placeholders})
-                FOR UPDATE""",
-            (req.event_id, *normalized_seats),
-        )
-        seat_rows = cursor.fetchall()
-
-        if len(seat_rows) != len(normalized_seats):
-            existing = {row["seat_id"] for row in seat_rows}
-            missing = [sid for sid in normalized_seats if sid not in existing]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid seat for venue: {missing[0]}",
-            )
-
-        seat_state = {row["seat_id"]: row for row in seat_rows}
-        for seat_id in normalized_seats:
-            occupied = int(seat_state[seat_id].get("occupied") or 0)
-            if occupied == 1:
-                raise HTTPException(
-                    status_code=409, detail=f"Seat already reserved: {seat_id}"
-                )
-
-        cursor.executemany(
-            """UPDATE seats
-               SET occupied = 1, reservation_id = %s
-               WHERE event_id = %s AND seat_id = %s""",
-            [(reservation_id, req.event_id, seat_id) for seat_id in normalized_seats],
-        )
-
-        cursor.execute(
-            """INSERT INTO reservations (reservation_id, event_id, user_email, status, seats, expires_at)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (
-                reservation_id,
-                req.event_id,
-                user_email,
-                "reserved",
-                json.dumps(normalized_seats),
-                datetime.fromtimestamp(expires_at, tz=timezone.utc),
-            ),
-        )
-
-        conn.commit()
-    except HTTPException:
-        conn.rollback()
-        if redis_hold_applied:
-            await _release_redis_hold(req.event_id, reservation_id, seat_indexes)
-        raise
-    except Exception as e:
-        conn.rollback()
-        if redis_hold_applied:
-            await _release_redis_hold(req.event_id, reservation_id, seat_indexes)
-        print(f"Error reserving seats: {e}")
-        raise HTTPException(status_code=500, detail="could not reserve seats")
-    finally:
-        cursor.close()
-        conn.close()
-
-    # Redis bitmap was already atomically updated by Lua.
     seats = list(normalized_seats)
 
     expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()

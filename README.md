@@ -264,13 +264,14 @@ The system is designed as a series of coordinated microservices; each step is ow
    - The frontend submits `POST /booking/bookings/reserve` with the selected seat IDs and the user's JWT token.
    - Booking Service generates a **reservation ID** (UUID) and an expiration timestamp.
    - Booking Service calls a Redis Lua script to atomically reserve seats in a Redis bitmap and store reservation metadata (reservation ID, seat indexes, expiry).
-   - Booking Service then inserts a row into MySQL `reservations`:
+   - Booking Service then inserts a row into MySQL `reservations` table:
      - `reservation_id` (UUID)
      - `event_id`
      - `user_email` (from forwarded header)
      - `status = reserved`
      - `seats` (JSON list)
      - `expires_at` (UTC timestamp)
+     The `reservations` table is for temporary seat holds before payment capture.
    - Booking Service publishes a notification message to Redis `queue:notifications` (type `reservation_confirmed`).
 
 4. **Payment**
