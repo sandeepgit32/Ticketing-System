@@ -1160,7 +1160,44 @@ async def reserve(
 async def payments_capture(body: dict, idempotency_key: Optional[str] = Header(None)):
     """Capture a payment by forwarding the request to the configured payment provider.
 
-    This is a minimal implementation used for local development and testing.
+    This is a minimal implementation used for local development and testing.  The
+    endpoint reads ``PAYMENT_PROVIDER_URL`` from the environment, proxies the
+    request body to ``POST {PAYMENT_PROVIDER_URL}/payments/intents``, and returns
+    the provider's JSON response verbatim.  Any HTTP error from the provider is
+    re-raised as an ``HTTPException`` with the same status code.
+
+    Args:
+        body: Arbitrary JSON payload forwarded to the payment provider.  At
+            minimum the provider expects an ``intent_id`` (a reservation UUID)
+            and an ``amount`` field, for example::
+
+                {
+                    "intent_id": "a3f1c2d4-...",
+                    "amount": 5000,
+                    "currency": "usd"
+                }
+
+        idempotency_key: Optional ``Idempotency-Key`` header value forwarded
+            unchanged to the payment provider so that retried requests are not
+            double-charged.  When omitted, no idempotency header is sent.
+
+    Returns:
+        The JSON body returned by the payment provider on success, for example::
+
+            {
+                "intent_id": "a3f1c2d4-...",
+                "status": "pending",
+                "amount": 5000,
+                "currency": "usd"
+            }
+
+    Raises:
+        HTTPException: Propagates the provider's HTTP status code (>= 400) and
+            response body verbatim when the upstream call fails.  Common codes:
+
+            * ``402`` - insufficient funds / card declined.
+            * ``409`` - duplicate intent (idempotency collision).
+            * ``503`` - payment provider temporarily unavailable.
     """
     # Minimal implementation: forward to mock provider
     payment_provider = required_env("PAYMENT_PROVIDER_URL")
@@ -1183,8 +1220,47 @@ async def payments_capture(body: dict, idempotency_key: Optional[str] = Header(N
 async def payments_webhook(request: Request):
     """Handle payment provider webhooks.
 
-    Expected payloads include `capture_succeeded` and `capture_failed` events.
-    Successful captures create a booking and update reservation status.
+    Expected payloads include ``capture_succeeded`` and ``capture_failed``
+    events delivered by the configured payment provider.  The endpoint processes
+    each event synchronously before enqueuing a generic job to ``queue:jobs``
+    for any downstream worker that needs the raw payload.
+
+    Event handling summary:
+
+    * **capture_succeeded** - Looks up the reservation identified by
+      ``intent_id``, inserts a confirmed ``bookings`` row, updates the
+      ``reservations`` row to ``confirmed``, and pushes a
+      ``payment_confirmed`` notification onto the Redis notification queue.
+      If the reservation cannot be found the booking step is skipped silently
+      (logged to stdout).
+
+    * **capture_failed** - Pushes a ``payment_failed`` notification onto the
+      Redis notification queue.  No database writes are performed.
+
+    * **Any other event type** - Passes through to the job queue without
+      specific handling.
+
+    .. note::
+        Webhook signature verification is not yet implemented.  Production
+        deployments should validate an HMAC header before trusting the payload.
+
+    Args:
+        request: The raw FastAPI ``Request`` object.  The JSON body is read
+            once and must conform to the webhook payload schema described below.
+
+    Webhook payload schema::
+
+        {
+            "event": "capture_succeeded" | "capture_failed",  # required
+            "intent_id": "<reservation-uuid>"                  # required
+        }
+
+    Returns:
+        ``{"ok": True}`` on success (``200 OK``) regardless of whether the
+        reservation was found, so the provider does not retry unnecessarily.
+
+    Raises:
+        HTTPException(400): When the ``event`` field is missing from the payload.
     """
     payload = await request.json()
     # naive signature validation (in real system, verify HMAC header)
@@ -1235,7 +1311,7 @@ async def payments_webhook(request: Request):
                     ("confirmed", datetime.now(timezone.utc), reservation_id),
                 )
 
-                # Get user email (simplified - would need to join with users table)
+                # Parse seats from reservation for notification (handle both JSON string and list formats)
                 seats = (
                     json.loads(reservation["seats"])
                     if isinstance(reservation["seats"], str)
@@ -1246,7 +1322,7 @@ async def payments_webhook(request: Request):
                 notification = {
                     "type": "payment_confirmed",
                     "data": {
-                        "user_email": reservation.get("user_email", "user@example.com"),
+                        "user_email": reservation.get("user_email"),
                         "booking_id": booking_id,
                         "reservation_id": reservation_id,
                         "event_id": reservation["event_id"],
