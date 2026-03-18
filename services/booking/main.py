@@ -482,23 +482,20 @@ async def startup_event():
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
 
     # Load lua script
-    lua_script_path = os.path.join(os.path.dirname(__file__), "redis_reserve.lua")
+    lua_dir = os.path.join(os.path.dirname(__file__), "lua")
+    lua_script_path = os.path.join(lua_dir, "redis_reserve.lua")
     with open(lua_script_path, "r") as f:
         script = f.read()
     reserve_sha = await redis_client.script_load(script)
     print("Loaded reserve Lua script, sha=", reserve_sha)
 
-    reserve_explicit_path = os.path.join(
-        os.path.dirname(__file__), "redis_reserve_explicit.lua"
-    )
+    reserve_explicit_path = os.path.join(lua_dir, "redis_reserve_explicit.lua")
     with open(reserve_explicit_path, "r") as f:
         reserve_explicit_script = f.read()
     reserve_explicit_sha = await redis_client.script_load(reserve_explicit_script)
     print("Loaded explicit reserve Lua script, sha=", reserve_explicit_sha)
 
-    release_explicit_path = os.path.join(
-        os.path.dirname(__file__), "redis_release_explicit.lua"
-    )
+    release_explicit_path = os.path.join(lua_dir, "redis_release_explicit.lua")
     with open(release_explicit_path, "r") as f:
         release_explicit_script = f.read()
     release_explicit_sha = await redis_client.script_load(release_explicit_script)
