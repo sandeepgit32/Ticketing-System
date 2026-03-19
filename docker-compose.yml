@@ -2,11 +2,7 @@ version: '3.8'
 services:
   database:
     build: ./services/database
-    environment:
-      - MYSQL_ROOT_PASSWORD=rootpass
-      - MYSQL_DATABASE=ticketing
-      - MYSQL_USER=ticketuser
-      - MYSQL_PASSWORD=ticketpass
+    env_file: ./services/database/.env
     ports:
       - "3307:3306"
     volumes:
@@ -28,14 +24,7 @@ services:
     depends_on:
       database:
         condition: service_healthy
-    environment:
-      - MYSQL_HOST=database
-      - MYSQL_PORT=3306
-      - MYSQL_USER=ticketuser
-      - MYSQL_PASSWORD=ticketpass
-      - MYSQL_DATABASE=ticketing
-      - JWT_SECRET_KEY=your-secret-key-change-in-production
-      - ACCESS_TOKEN_EXPIRE_MINUTES=60
+    env_file: ./services/auth/.env
     ports:
       - "8002:8000"
 
@@ -46,13 +35,7 @@ services:
         condition: service_healthy
       auth:
         condition: service_started
-    environment:
-      - MYSQL_HOST=database
-      - MYSQL_PORT=3306
-      - MYSQL_USER=ticketuser
-      - MYSQL_PASSWORD=ticketpass
-      - MYSQL_DATABASE=ticketing
-      - AUTH_SERVICE_URL=http://auth:8000
+    env_file: ./services/booking-status/.env
     ports:
       - "8003:8000"
 
@@ -63,13 +46,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - MYSQL_HOST=database
-      - MYSQL_PORT=3306
-      - MYSQL_USER=ticketuser
-      - MYSQL_PASSWORD=ticketpass
-      - MYSQL_DATABASE=ticketing
+    env_file: ./services/booking/.env
     ports:
       - "8001:8000"
 
@@ -77,6 +54,7 @@ services:
     build: ./services/payment/mock
     depends_on:
       - redis
+    env_file: ./services/payment/mock/.env
     ports:
       - "9001:9000"
 
@@ -84,13 +62,7 @@ services:
     build: ./services/notification
     depends_on:
       - redis
-    environment:
-      - REDIS_URL=redis://redis:6379/0
-      - SMTP_HOST=sandbox.smtp.mailtrap.io
-      - SMTP_PORT=2525
-      - SMTP_USER=${MAILTRAP_USER:-}
-      - SMTP_PASSWORD=${MAILTRAP_PASSWORD:-}
-      - FROM_EMAIL=noreply@ticketing-system.com
+    env_file: ./services/notification/.env
 
   gateway:
     build: ./services/gateway
@@ -99,11 +71,7 @@ services:
       - booking
       - booking-status
       - payment-mock
-    environment:
-      - AUTH_SERVICE_URL=http://auth:8000
-      - BOOKING_SERVICE_URL=http://booking:8000
-      - BOOKING_STATUS_SERVICE_URL=http://booking-status:8000
-      - PAYMENT_SERVICE_URL=http://payment-mock:9000
+    env_file: ./services/gateway/.env
     ports:
       - "8000:8000"
 
@@ -115,6 +83,7 @@ services:
       - "5174:5173"
     environment:
       - VITE_BACKEND_URL=http://gateway:8000
+    # VITE_BACKEND_URL is intentionally kept inline — it can vary per deploy target (local vs staging vs prod)
 
 volumes:
   mysql_data:
