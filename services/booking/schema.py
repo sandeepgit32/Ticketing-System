@@ -12,3 +12,9 @@ class CreateEventRequest(BaseModel):
     name: str
     venue: str
     start_time: str
+
+
+class PaymentCaptureRequest(BaseModel):
+    intent_id: str
+    amount: float
+    currency: Optional[str] = "usd"

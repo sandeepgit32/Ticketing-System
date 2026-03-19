@@ -3,10 +3,9 @@ Mock Payment Provider Service
 ==============================
 Simulates a third-party payment gateway for local development and integration testing.
 
-The service exposes three endpoints mirroring a typical payment-intent lifecycle:
-  1. POST /payments/intents         — create a payment intent
-  2. POST /payments/intents/{id}/confirm — confirm (capture) the intent
-  3. POST /admin/next               — placeholder for deterministic test control
+The service exposes two endpoints mirroring a typical payment-intent lifecycle:
+  1. POST /payments/intents              — create a payment intent
+  2. GET  /payments/intents/{id}/confirm — confirm (capture) the intent
 
 Upon confirmation the service fires a signed webhook to the booking service so that
 the booking workflow can act on the payment outcome without polling.
@@ -16,116 +15,52 @@ Environment variables (see .env.example):
   BOOKING_WEBHOOK_URL URL of the booking service webhook receiver.
 """
 
-import os
-import uuid
-import time
-import hmac
 import hashlib
+import hmac
 import json
+import os
+import time
+import uuid
+from typing import Optional
+
+import httpx
+import redis.asyncio as redis
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.background import BackgroundTasks
-import httpx
 
 app = FastAPI(title="Mock Payment Provider")
 
-# In-memory store that maps idempotency keys to previously created intents.
-# This ensures that retried requests with the same key return the same intent.
-intents: dict = {}
+redis_client: Optional[redis.Redis] = None
+
+# TTL for idempotency keys stored in Redis (24 hours).
+IDEMPOTENCY_TTL = 86400
+
+
+def required_env(key: str, cast=str):
+    """Return the value of an environment variable or raise if missing.
+
+    Args:
+        key: The name of the environment variable.
+        cast: Optional callable to cast the string value.
+
+    Raises:
+        RuntimeError: if the environment variable is not set.
+    """
+
+    value = os.environ.get(key)
+    if value is None:
+        raise RuntimeError(f"Missing required environment variable: {key}")
+    return cast(value)
+
 
 # Shared secret used to generate HMAC-SHA256 signatures on outbound webhooks.
 # The booking service must use the same secret to verify authenticity.
-WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "secret")
+WEBHOOK_SECRET = required_env("WEBHOOK_SECRET")
 
 # Full URL of the booking service endpoint that receives payment webhook events.
-BOOKING_WEBHOOK_URL = os.getenv(
-    "BOOKING_WEBHOOK_URL", "http://booking:8000/payments/webhook"
-)
+BOOKING_WEBHOOK_URL = required_env("BOOKING_WEBHOOK_URL")
 
-
-@app.post("/payments/intents")
-async def create_intent(payload: dict, idempotency_key: str = Header(None)):
-    """
-    Create a new payment intent.
-
-    Accepts an arbitrary JSON payload (e.g. amount, currency, booking reference)
-    and returns an intent object with status ``requires_confirmation``.
-
-    Idempotency is supported via the ``Idempotency-Key`` request header: if the
-    same key is sent more than once, the original intent is returned without
-    creating a duplicate.
-
-    Args:
-        payload: Arbitrary payment details supplied by the caller.
-        idempotency_key: Optional client-generated unique key (HTTP header).
-
-    Returns:
-        dict: The created (or previously cached) payment intent.
-    """
-    # Return the cached intent if the client is retrying with the same key.
-    if idempotency_key and idempotency_key in intents:
-        return intents[idempotency_key]
-
-    intent_id = str(uuid.uuid4())
-    intent = {
-        "intent_id": intent_id,
-        "status": "requires_confirmation",
-        "payload": payload,
-    }
-
-    # Only persist to the idempotency store when a key was provided.
-    if idempotency_key:
-        intents[idempotency_key] = intent
-
-    return intent
-
-
-@app.post("/payments/intents/{intent_id}/confirm")
-async def confirm_intent(
-    intent_id: str, background: BackgroundTasks, delay_ms: int = 0, success: bool = True
-):
-    """
-    Confirm (capture) an existing payment intent.
-
-    Triggers a webhook notification to the booking service in the background so
-    the HTTP response is returned to the caller immediately, decoupling the
-    booking service's processing from the payment provider's response time.
-
-    The webhook payload is signed with HMAC-SHA256 using ``WEBHOOK_SECRET`` and
-    delivered in the ``X-Signature`` header, allowing the receiver to verify the
-    payload has not been tampered with.
-
-    Args:
-        intent_id: UUID of the intent to confirm.
-        background: FastAPI background task runner.
-        delay_ms: Reserved for future use — intended to simulate processing delay.
-        success: When ``True`` the webhook reports ``capture_succeeded``,
-                 otherwise ``capture_failed``.
-
-    Returns:
-        dict: Acknowledgement that the webhook has been scheduled.
-    """
-    # Build the webhook event payload that mirrors a real provider's callback.
-    payload = {
-        "event": "capture_succeeded" if success else "capture_failed",
-        "payment_id": str(uuid.uuid4()),  # unique ID for this capture attempt
-        "intent_id": intent_id,
-        "timestamp": int(time.time()),
-    }
-
-    async def send_webhook():
-        """Send the signed webhook to the booking service."""
-        signature = generate_signature(json.dumps(payload))
-        async with httpx.AsyncClient() as client:
-            await client.post(
-                BOOKING_WEBHOOK_URL,
-                json=payload,
-                headers={"X-Signature": signature},
-            )
-
-    # Schedule the webhook delivery as a background task so the caller receives
-    # an immediate response rather than waiting for the HTTP round-trip.
-    background.add_task(send_webhook)
-    return {"ok": True, "scheduled": True}
+REDIS_URL = required_env("REDIS_URL")
 
 
 def generate_signature(body: str) -> str:
@@ -145,25 +80,137 @@ def generate_signature(body: str) -> str:
     return hmac.new(WEBHOOK_SECRET.encode(), body.encode(), hashlib.sha256).hexdigest()
 
 
-@app.post("/admin/next")
-async def set_next(payload: dict):
+@app.on_event("startup")
+async def startup_event():
+    global redis_client
+    redis_client = redis.from_url(REDIS_URL, decode_responses=True)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    if redis_client is not None:
+        await redis_client.aclose()
+
+
+@app.post("/payments/intents")
+async def create_intent(payload: dict, idempotency_key: str = Header(None)):
     """
-    Configure the outcome of the next payment confirmation (stub).
+    Create a new payment intent.
 
-    Intended to allow test suites to pre-program whether the next
-    ``/payments/intents/{id}/confirm`` call should succeed or fail, enabling
-    fully deterministic integration tests without modifying query parameters.
+    Registers a payment intent using the ``intent_id`` supplied in the request
+    body.  The caller is responsible for generating and providing a unique
+    ``intent_id`` (e.g. a reservation UUID).  Returns an intent object with
+    status ``requires_confirmation``.
 
-    Currently a no-op placeholder — behaviour can be wired up as needed.
+    Idempotency is supported via the ``Idempotency-Key`` request header: if the
+    same key is sent more than once, the original intent is returned without
+    creating a duplicate.
 
     Args:
-        payload: Configuration dict (e.g. ``{"success": false}``).
+        payload: Payment details supplied by the caller.  Must include
+            ``intent_id`` (a caller-generated UUID) and should include
+            ``amount`` and ``currency``.
+        idempotency_key: Optional client-generated unique key (HTTP header).
 
     Returns:
-        dict: Simple acknowledgement.
+        dict: The created (or previously cached) payment intent.
+
+    Raises:
+        HTTPException(400): If ``intent_id`` is missing from the payload.
     """
-    # TODO: store payload to influence the next confirm call deterministically.
-    return {"ok": True}
+    # Return the cached intent if the client is retrying with the same key.
+    if idempotency_key:
+        cached = await redis_client.get(f"idempotency:{idempotency_key}")
+        if cached:
+            return json.loads(cached)
+
+    intent_id = payload.get("intent_id")
+    if not intent_id:
+        raise HTTPException(status_code=400, detail="intent_id is required in payload")
+
+    intent = {
+        "intent_id": intent_id,
+        "status": "requires_confirmation",
+        "amount": payload.get("amount"),
+        "currency": payload.get("currency"),
+    }
+
+    # Only persist to the idempotency store when a key was provided.
+    if idempotency_key:
+        await redis_client.set(
+            f"idempotency:{idempotency_key}", json.dumps(intent), ex=IDEMPOTENCY_TTL
+        )
+
+    return intent
+
+
+@app.get("/payments/intents/{intent_id}/confirm")
+async def confirm_intent(intent_id: str, background: BackgroundTasks):
+    """
+    Confirm (capture) an existing payment intent.
+
+    Triggers a webhook notification to the booking service in the background so
+    the HTTP response is returned to the caller immediately, decoupling the
+    booking service's processing from the payment provider's response time.
+
+    The webhook payload is signed with HMAC-SHA256 using ``WEBHOOK_SECRET`` and
+    delivered in the ``X-Signature`` header, allowing the receiver to verify the
+    payload has not been tampered with.
+
+    Success is non-deterministic: the capture succeeds 90% of the time and
+    fails 10% of the time, simulating real-world payment provider behaviour.
+
+    FastAPI injects BackgroundTasks automatically from the function signature,
+    so it doesn't need to be passed by the caller; it never appeared in the request body
+
+    Args:
+        intent_id: UUID of the intent to confirm.
+
+    Returns:
+        dict: Acknowledgement that the webhook has been scheduled.
+
+    Examples:
+        Successful capture (90% probability)::
+
+            GET /payments/intents/abc-123/confirm
+            -> {"ok": True, "scheduled": True}
+            # Webhook delivered: {"event": "capture_succeeded", ...}
+
+        Failed capture (10% probability)::
+
+            GET /payments/intents/abc-123/confirm
+            -> {"ok": True, "scheduled": True}
+            # Webhook delivered: {"event": "capture_failed", ...}
+    """
+    import random
+
+    success = random.random() < 0.9
+
+    # Build the webhook event payload that mirrors a real provider's callback.
+    payload = {
+        "event": "capture_succeeded" if success else "capture_failed",
+        "payment_id": str(uuid.uuid4()),  # unique ID for this capture attempt
+        "intent_id": intent_id,
+        "timestamp": int(time.time()),
+    }
+
+    # Simulate a delay in processing the confirmation (e.g. to test timeouts).
+    time.sleep(4)
+
+    async def send_webhook():
+        """Send the signed webhook to the booking service."""
+        signature = generate_signature(json.dumps(payload))
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                BOOKING_WEBHOOK_URL,
+                json=payload,
+                headers={"X-Signature": signature},
+            )
+
+    # Schedule the webhook delivery as a background task so the caller receives
+    # an immediate response rather than waiting for the HTTP round-trip.
+    background.add_task(send_webhook)
+    return {"ok": True, "scheduled": True}
 
 
 if __name__ == "__main__":

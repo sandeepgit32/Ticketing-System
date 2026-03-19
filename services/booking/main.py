@@ -12,7 +12,7 @@ import yaml
 from db_utils import execute_query, fetch_all, fetch_one, require_db_pool
 from fastapi import FastAPI, Header, HTTPException, Request
 from mysql.connector import pooling
-from schema import CreateEventRequest, ReserveRequest
+from schema import CreateEventRequest, PaymentCaptureRequest, ReserveRequest
 
 
 def required_env(key: str, cast=str):
@@ -1142,7 +1142,9 @@ async def reserve(
 
 
 @app.post("/payments/capture")
-async def payments_capture(body: dict, idempotency_key: Optional[str] = Header(None)):
+async def payments_capture(
+    body: PaymentCaptureRequest, idempotency_key: Optional[str] = Header(None)
+):
     """Capture a payment by forwarding the request to the configured payment provider.
 
     This is a minimal implementation used for local development and testing.  The
@@ -1192,7 +1194,7 @@ async def payments_capture(body: dict, idempotency_key: Optional[str] = Header(N
             headers["Idempotency-Key"] = idempotency_key
         r = await client.post(
             f"{payment_provider}/payments/intents",
-            json=body,
+            json=body.model_dump(),
             headers=headers,
             timeout=10,
         )
