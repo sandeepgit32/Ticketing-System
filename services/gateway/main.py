@@ -51,7 +51,6 @@ async def verify_token(
 async def proxy_request(
     request: Request,
     target_url: str,
-    require_auth: bool = False,
     user_info: dict = None,
 ):
     """Proxy request to target service"""
@@ -59,6 +58,9 @@ async def proxy_request(
         # Prepare headers
         headers = dict(request.headers)
         headers.pop("host", None)  # Remove host header
+        headers.pop(
+            "authorization", None
+        )  # Strip JWT; downstream services use X-User-Email
 
         # Add user info if authenticated
         if user_info:
@@ -150,11 +152,58 @@ async def auth_verify(request: Request):
 # ============== Booking Service Routes ==============
 
 
+@app.get("/booking/venues")
+async def list_venues(request: Request):
+    """List all venues"""
+    target_url = f"{BOOKING_SERVICE_URL}/venues"
+    return await proxy_request(request, target_url)
+
+
+@app.get("/booking/venues/{venue_name}")
+async def get_venue(venue_name: str, request: Request):
+    """Get venue details"""
+    target_url = f"{BOOKING_SERVICE_URL}/venues/{venue_name}"
+    return await proxy_request(request, target_url)
+
+
+@app.get("/booking/events")
+async def list_events(request: Request):
+    """List all events"""
+    target_url = f"{BOOKING_SERVICE_URL}/events"
+    return await proxy_request(request, target_url)
+
+
 @app.get("/booking/events/{event_id}")
 async def get_event(event_id: str, request: Request):
     """Get event details"""
     target_url = f"{BOOKING_SERVICE_URL}/events/{event_id}"
     return await proxy_request(request, target_url)
+
+
+@app.post("/booking/events")
+async def create_event(request: Request, user_info: dict = Depends(verify_token)):
+    """Create a new event (requires authentication)"""
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+        )
+
+    target_url = f"{BOOKING_SERVICE_URL}/events"
+    return await proxy_request(request, target_url, user_info=user_info)
+
+
+@app.get("/booking/events/{event_id}/close")
+async def close_event(
+    event_id: str, request: Request, user_info: dict = Depends(verify_token)
+):
+    """Close an event (requires authentication)"""
+    if not user_info:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+        )
+
+    target_url = f"{BOOKING_SERVICE_URL}/events/{event_id}/close"
+    return await proxy_request(request, target_url, user_info=user_info)
 
 
 @app.post("/booking/bookings/reserve")
@@ -166,9 +215,7 @@ async def reserve_seats(request: Request, user_info: dict = Depends(verify_token
         )
 
     target_url = f"{BOOKING_SERVICE_URL}/bookings/reserve"
-    return await proxy_request(
-        request, target_url, require_auth=True, user_info=user_info
-    )
+    return await proxy_request(request, target_url, user_info=user_info)
 
 
 @app.post("/booking/payments/capture")
@@ -180,9 +227,7 @@ async def capture_payment(request: Request, user_info: dict = Depends(verify_tok
         )
 
     target_url = f"{BOOKING_SERVICE_URL}/payments/capture"
-    return await proxy_request(
-        request, target_url, require_auth=True, user_info=user_info
-    )
+    return await proxy_request(request, target_url, user_info=user_info)
 
 
 @app.post("/booking/payments/webhook")
@@ -193,22 +238,6 @@ async def payment_webhook(request: Request):
 
 
 # ============== Booking Status Service Routes ==============
-
-
-@app.get("/status/{reservation_id}")
-async def get_reservation_status(
-    reservation_id: str, request: Request, user_info: dict = Depends(verify_token)
-):
-    """Get reservation status (requires authentication)"""
-    if not user_info:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
-        )
-
-    target_url = f"{BOOKING_STATUS_SERVICE_URL}/status/{reservation_id}"
-    return await proxy_request(
-        request, target_url, require_auth=True, user_info=user_info
-    )
 
 
 @app.get("/status/bookings/{booking_id}")
@@ -222,9 +251,7 @@ async def get_booking_details(
         )
 
     target_url = f"{BOOKING_STATUS_SERVICE_URL}/bookings/{booking_id}"
-    return await proxy_request(
-        request, target_url, require_auth=True, user_info=user_info
-    )
+    return await proxy_request(request, target_url, user_info=user_info)
 
 
 @app.get("/status/user/bookings")
@@ -236,9 +263,7 @@ async def get_user_bookings(request: Request, user_info: dict = Depends(verify_t
         )
 
     target_url = f"{BOOKING_STATUS_SERVICE_URL}/user/bookings"
-    return await proxy_request(
-        request, target_url, require_auth=True, user_info=user_info
-    )
+    return await proxy_request(request, target_url, user_info=user_info)
 
 
 # ============== Payment Service Routes (for testing) ==============
@@ -251,7 +276,7 @@ async def create_payment_intent(request: Request):
     return await proxy_request(request, target_url)
 
 
-@app.post("/payment/intents/{intent_id}/confirm")
+@app.get("/payment/intents/{intent_id}/confirm")
 async def confirm_payment_intent(intent_id: str, request: Request):
     """Confirm payment intent"""
     target_url = f"{PAYMENT_SERVICE_URL}/payments/intents/{intent_id}/confirm"

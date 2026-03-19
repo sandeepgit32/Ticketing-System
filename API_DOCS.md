@@ -106,30 +106,62 @@ Authorization: Bearer <token>
 
 ## Booking Endpoints
 
-### Get Event Details
+### List Venues
 
-**GET** `/booking/events/{event_id}`
+**GET** `/booking/venues`
 
-Get event information and available seats. (Public endpoint)
+Return all configured venues. Public endpoint.
 
 **Response:** `200 OK`
 ```json
 {
-  "event_id": "event123",
-  "name": "Event event123",
-  "start_time": "2026-02-14T19:00:00Z",
-  "venue": "Sample Stadium",
-  "rows": [
+  "venues": [
+    { "name": "Sample Stadium" }
+  ]
+}
+```
+
+---
+
+### Get Venue Details
+
+**GET** `/booking/venues/{venue_name}`
+
+Return the seating layout and pricing for a venue. Public endpoint.
+
+**Response:** `200 OK`
+```json
+{
+  "name": "Sample Stadium",
+  "rows": ["A", "B", "C", "D"],
+  "columns": [1, 2, 3, 4, 5],
+  "seat_price": {
+    "A": 75.0,
+    "B": 50.0
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found` - Venue not found
+
+---
+
+### List Events
+
+**GET** `/booking/events`
+
+Return a list of all events. Public endpoint.
+
+**Response:** `200 OK`
+```json
+{
+  "events": [
     {
-      "row_id": "A",
-      "seats_count": 50,
-      "available_intervals": [
-        {
-          "start": 1,
-          "length": 50
-        }
-      ],
-      "cached_at": "2026-02-07T12:00:00Z"
+      "event_id": "evt-abc123",
+      "name": "Rock Concert 2026",
+      "venue": "Sample Stadium",
+      "date": "2026-06-15"
     }
   ]
 }
@@ -137,11 +169,49 @@ Get event information and available seats. (Public endpoint)
 
 ---
 
-### Reserve Seats
+### Get Event Details
 
-**POST** `/booking/bookings/reserve`
+**GET** `/booking/events/{event_id}`
 
-Reserve seats for an event. **Requires Authentication.**
+Get event information and available seats. Public endpoint.
+
+**Response:** `200 OK`
+```json
+{
+  "event_id": "evt-abc123",
+  "name": "Rock Concert 2026",
+  "start_time": "2026-06-15T19:00:00",
+  "venue": "Sample Stadium",
+  "closed": 0,
+  "seat_arrangements": [
+    ["A1", "A2", "A3", "A4"],
+    ["B1", "B2", "B3", "B4"]
+  ],
+  "seat_availability_map": {
+    "A1": 0,
+    "A2": 1,
+    "B1": 0,
+    "B2": 0
+  },
+  "seat_price_map": {
+    "A1": 75.0,
+    "A2": 75.0,
+    "B1": 50.0,
+    "B2": 50.0
+  }
+}
+```
+
+**Errors:**
+- `404 Not Found` - Event not found
+
+---
+
+### Create Event
+
+**POST** `/booking/events`
+
+Create a new event and pre-populate its seats from the venue configuration. **Requires Authentication.**
 
 **Headers:**
 ```
@@ -151,46 +221,55 @@ Authorization: Bearer <token>
 **Request Body:**
 ```json
 {
-  "event_id": "event123",
-  "num_seats": 2,
-  "preferred_rows": ["A", "B"]
+  "name": "Rock Concert 2026",
+  "venue": "Sample Stadium",
+  "start_time": "2026-06-15T19:00:00"
 }
 ```
 
 **Response:** `201 Created`
 ```json
 {
-  "reservation_id": "uuid",
-  "event_id": "event123",
-  "seats": [
-    {
-      "row": "A",
-      "seat": 1,
-      "event_id": "event123"
-    },
-    {
-      "row": "A",
-      "seat": 2,
-      "event_id": "event123"
-    }
-  ],
-  "expires_at": "2026-02-07T12:10:00Z",
-  "status": "reserved"
+  "event_id": "a3f1c2d4-5678-90ab-cdef-1234567890ab"
 }
 ```
 
 **Errors:**
-- `400 Bad Request` - Invalid num_seats
+- `400 Bad Request` - Unknown venue
 - `401 Unauthorized` - Missing or invalid token
-- `409 Conflict` - No contiguous block available
 
 ---
 
-### Capture Payment
+### Close Event
 
-**POST** `/booking/payments/capture`
+**GET** `/booking/events/{event_id}/close`
 
-Process payment for a reservation. **Requires Authentication.**
+Mark an event as closed so no new reservations can be made. Outstanding reservations are expired and seats freed. **Requires Authentication.**
+
+**Headers:**
+```
+Authorization: Bearer <token>
+```
+
+**Response:** `200 OK`
+```json
+{
+  "event_id": "evt-abc123",
+  "status": "closed"
+}
+```
+
+**Errors:**
+- `401 Unauthorized` - Missing or invalid token
+- `404 Not Found` - Event not found
+
+---
+
+### Reserve Seats
+
+**POST** `/booking/bookings/reserve`
+
+Reserve specific seats for an event. **Requires Authentication.**
 
 **Headers:**
 ```
@@ -201,9 +280,48 @@ Idempotency-Key: unique-key (optional)
 **Request Body:**
 ```json
 {
+  "event_id": "evt-abc123",
+  "selected_seats": ["A1", "A2"]
+}
+```
+
+**Response:** `201 Created`
+```json
+{
   "reservation_id": "uuid",
-  "payment_method": "card",
-  "amount": 100.00
+  "event_id": "evt-abc123",
+  "seats": ["A1", "A2"],
+  "expires_at": "2026-02-07T12:10:00Z",
+  "status": "reserved"
+}
+```
+
+**Errors:**
+- `400 Bad Request` - Empty seat list, invalid seat ID, or duplicate seats
+- `401 Unauthorized` - Missing or invalid token
+- `404 Not Found` - Event not found
+- `409 Conflict` - Seat already reserved or event is closed
+
+---
+
+### Capture Payment
+
+**POST** `/booking/payments/capture`
+
+Forward a payment capture request to the payment provider. **Requires Authentication.**
+
+**Headers:**
+```
+Authorization: Bearer <token>
+Idempotency-Key: unique-key (optional)
+```
+
+**Request Body:**
+```json
+{
+  "intent_id": "uuid",
+  "amount": 150.00,
+  "currency": "USD"
 }
 ```
 
@@ -211,53 +329,22 @@ Idempotency-Key: unique-key (optional)
 ```json
 {
   "intent_id": "uuid",
-  "status": "requires_confirmation"
+  "status": "requires_confirmation",
+  "amount": 150.00,
+  "currency": "USD"
 }
 ```
+
+**Errors:**
+- `401 Unauthorized` - Missing or invalid token
+- `402 Payment Required` - Payment declined
+- `503 Service Unavailable` - Payment provider unavailable
 
 ---
 
 ## Booking Status Endpoints
 
 All booking status endpoints **require authentication**.
-
-### Get Reservation Status
-
-**GET** `/status/{reservation_id}`
-
-Get the current status of a reservation.
-
-**Headers:**
-```
-Authorization: Bearer <token>
-```
-
-**Response:** `200 OK`
-```json
-{
-  "reservation_id": "uuid",
-  "event_id": "event123",
-  "user_id": "uuid",
-  "status": "reserved",
-  "seats": [
-    {
-      "row": "A",
-      "seat": 1,
-      "event_id": "event123"
-    }
-  ],
-  "created_at": "2026-02-07T12:00:00Z",
-  "expires_at": "2026-02-07T12:10:00Z",
-  "confirmed_at": null
-}
-```
-
-**Errors:**
-- `401 Unauthorized` - Invalid token
-- `403 Forbidden` - Not authorized to view this reservation
-- `404 Not Found` - Reservation not found
-
----
 
 ### Get Booking Details
 
@@ -366,7 +453,7 @@ Idempotency-Key: unique-key (optional)
 
 ### Confirm Payment Intent
 
-**POST** `/payment/intents/{intent_id}/confirm`
+**GET** `/payment/intents/{intent_id}/confirm`
 
 Confirm and process a payment intent.
 
