@@ -1,148 +1,124 @@
 --[[
   redis_reserve.lua
   -----------------
-  Atomically reserve a contiguous block of seats in a single venue row.
+  Atomically reserve a caller-specified set of seat indexes in an event bitmap.
 
-  This script is executed via EVAL/EVALSHA so every step runs inside Redis
-  as a single atomic unit — no external locks or multi-step transactions are
-  required and no partial state can be observed by concurrent callers.
+  This script accepts a caller-specified list of zero-based seat indexes and either
+  reserves all of them or rejects the entire request — there is no partial hold.
 
   Algorithm
   ---------
-  1. Read the row bitmap (a plain string of '0'/'1' characters, one char per
-     seat — '0' = free, '1' = taken).
-  2. Scan the bitmap for every run of `num_seats` consecutive '0' characters
-     and collect all starting positions as candidates.
-  3. If no candidate run exists, return the error token "NO_BLOCK".
-  4. Pick one candidate at random (seeded from Redis's own microsecond clock)
-     so that concurrent requests are spread across the row rather than always
-     colliding at the leftmost available block.
-  5. Flip the chosen positions to '1' and write the updated bitmap back.
-  6. Build a JSON array describing the reserved seats (row + index pairs).
-  7. Store reservation metadata in a Redis hash and schedule expiry via both
-     EXPIRE and a TTL sorted set used by the background expiry worker.
-  8. Return {reservation_id, seats_json, expiry_epoch} to the caller.
+  1. Validate all inputs (expiry timestamp, TTL, and seat index list).
+  2. In a first pass, check each requested bit in the event bitmap.
+     If any bit is already set (seat taken), abort immediately with
+     "SEAT_TAKEN" — no writes have occurred at this point.
+  3. In a second pass (only reached when all seats are free), set each
+     bit to 1, marking the seats as held.
+  4. Write reservation metadata into a Redis hash and schedule expiry
+     via both EXPIRE and the TTL sorted set used by the expiry worker.
+  5. Return {"OK", reservation_id} to the caller.
 
   Keys
   ----
-  KEYS[1]  seats:{event_id}:row:{row_id}:bitmap
-             Plain-string bitmap for the row; '0' = free, '1' = taken.
+  KEYS[1]  seats:{event_id}:bitmap     Per-event bitfield; bit N represents seat N.
+  KEYS[2]  reservation:{reservation_id} Hash storing reservation metadata.
+  KEYS[3]  reservations:ttl            Sorted set used as a TTL index by the
+                                       background expiry worker.
 
   Arguments
   ---------
-  ARGV[1]  num_seats             Number of contiguous seats requested.
-  ARGV[2]  reservation_id        UUID for this reservation (caller-generated).
-  ARGV[3]  event_id              UUID of the target event.
-  ARGV[4]  row_id                Row identifier (e.g. "A", "B") used to build
-                                 the seat coordinate JSON.
-  ARGV[5]  user_email            Email of the reserving user; stored in the
-                                 reservation hash for downstream use.
-  ARGV[6]  amount_cents          Total price in cents for the block.
-  ARGV[7]  ttl_seconds           Redis EXPIRE value for the reservation hash.
-  ARGV[8]  expiry_epoch_seconds  Unix timestamp at which the hold expires;
-                                 used as the sorted-set score.
+  ARGV[1]  reservation_id        UUID for this reservation (caller-generated).
+  ARGV[2]  event_id              UUID of the target event.
+  ARGV[3]  user_email            Email of the reserving user.
+  ARGV[4]  expires_epoch_seconds Unix timestamp when the hold expires; used as
+                                 the sorted-set score.
+  ARGV[5]  ttl_seconds           Seconds until the reservation hash auto-expires.
+  ARGV[6]  seat_indexes_json     JSON array of zero-based integer seat indexes,
+                                 e.g. [0, 1, 5].
 
-  Return value
-  ------------
-  On success : {reservation_id, seats_json, expiry_epoch}
-  On failure : Redis error table  {err = "NO_BLOCK"}
+  Return values
+  -------------
+  {"OK",  reservation_id}  — all seats successfully reserved.
+  {"ERR", "INVALID_SEATS"} — input validation failed (bad JSON, empty list,
+                             negative index, or non-numeric expiry/TTL).
+  {"ERR", "SEAT_TAKEN"}    — at least one requested seat was already held;
+                             no state was modified.
 --]]
 
 -- ── Key / argument bindings ───────────────────────────────────────────────────
 
-local key          = KEYS[1]               -- row bitmap key
-local num_seats    = tonumber(ARGV[1])     -- how many consecutive seats needed
-local reservation_id = ARGV[2]             -- UUID for this hold
-local event_id     = ARGV[3]
-local row_id       = ARGV[4]              -- used when building seat JSON
-local user_email   = ARGV[5]
-local amount_cents = ARGV[6]
-local ttl_seconds  = tonumber(ARGV[7])    -- TTL for the reservation hash
-local expiry_epoch = tonumber(ARGV[8])    -- score in the TTL sorted set
+local bitmap_key      = KEYS[1]  -- per-event seat bitmap
+local reservation_key = KEYS[2]  -- hash key for this reservation's metadata
+local ttl_key         = KEYS[3]  -- sorted set used by the expiry worker
 
--- ── Step 1: Load the row bitmap ───────────────────────────────────────────────
+local reservation_id    = ARGV[1]
+local event_id          = ARGV[2]
+local user_email        = ARGV[3]
+local expires_epoch     = tonumber(ARGV[4])  -- nil if non-numeric
+local ttl_seconds       = tonumber(ARGV[5])  -- nil if non-numeric
+local seat_indexes_json = ARGV[6]
 
-local bmp = redis.call('GET', key)
-if not bmp then
-  -- Bitmap has not been seeded yet; treat the entire row as unavailable.
-  return {err='NO_BLOCK'}
+-- ── Step 1: Input validation ──────────────────────────────────────────────────
+
+-- Both numeric arguments must be present and parseable.
+if not expires_epoch or not ttl_seconds then
+  return {"ERR", "INVALID_SEATS"}
 end
 
--- ── Step 2: Find all contiguous free-seat blocks of the requested length ──────
-
--- Build a pattern of `num_seats` '0' characters to search for in the bitmap.
-local pattern    = string.rep('0', num_seats)
-local candidates = {}  -- starting positions (1-based) of matching blocks
-local pos        = 1
-
-while true do
-  -- find() with plain=true avoids Lua pattern-magic character issues.
-  local i = string.find(bmp, pattern, pos, true)
-  if not i then break end   -- no more matches
-  table.insert(candidates, i)
-  pos = i + 1               -- advance by 1 to allow overlapping detection
+-- Decode the seat index list; reject missing or empty arrays.
+local seat_indexes = cjson.decode(seat_indexes_json)
+if not seat_indexes or #seat_indexes == 0 then
+  return {"ERR", "INVALID_SEATS"}
 end
 
--- ── Step 3: Bail out if no block is available ─────────────────────────────────
+-- ── Step 2: Conflict check (read-only pass) ───────────────────────────────────
 
-if #candidates == 0 then
-  return {err='NO_BLOCK'}
+-- Iterate every requested seat index before making any writes.
+-- This ensures the operation is all-or-nothing: if any seat is taken we bail
+-- without having modified the bitmap.
+for i = 1, #seat_indexes do
+  local idx = tonumber(seat_indexes[i])
+
+  -- Reject non-numeric or negative indexes.
+  if idx == nil or idx < 0 then
+    return {"ERR", "INVALID_SEATS"}
+  end
+
+  -- GETBIT returns 1 if the seat is already held, 0 if free.
+  local occupied = redis.call("GETBIT", bitmap_key, idx)
+  if occupied == 1 then
+    return {"ERR", "SEAT_TAKEN"}  -- abort: do not write anything
+  end
 end
 
--- ── Step 4: Pick a random candidate for fairness ──────────────────────────────
+-- ── Step 3: Mark seats as held (write pass) ───────────────────────────────────
 
--- Seed from the microsecond component of Redis TIME so different Redis
--- instances (or rapid successive calls) get different seeds.
-math.randomseed(tonumber(redis.call('TIME')[2]))
-local pick_i = candidates[math.random(#candidates)]
-
--- ── Step 5: Flip chosen seats to '1' and write the bitmap back ────────────────
-
--- Reconstruct the bitmap: prefix | reserved block | suffix
-local pre  = ''
-if pick_i > 1 then
-  pre = string.sub(bmp, 1, pick_i - 1)  -- seats before the chosen block
+-- All seats were free; set each bit to 1 atomically within this script.
+for i = 1, #seat_indexes do
+  redis.call("SETBIT", bitmap_key, tonumber(seat_indexes[i]), 1)
 end
 
-local taken = string.rep('1', num_seats) -- mark chosen seats as taken
+-- ── Step 4: Persist reservation metadata and schedule expiry ─────────────────
 
-local post = ''
-if (pick_i + num_seats) <= string.len(bmp) then
-  post = string.sub(bmp, pick_i + num_seats)  -- seats after the chosen block
-end
-
-local newbmp = pre .. taken .. post
-redis.call('SET', key, newbmp)
-
--- ── Step 6: Build the seats JSON array ────────────────────────────────────────
-
--- Each element is {"row":"<row_id>","index":<0-based column index>}.
-local seats = {}
-for i = 0, num_seats - 1 do
-  table.insert(seats, string.format('{"row":"%s","index":%d}', row_id, pick_i + i))
-end
-local seats_json = '[' .. table.concat(seats, ',') .. ']'
-
--- ── Step 7: Persist reservation metadata and schedule expiry ─────────────────
-
--- Store all reservation fields in a Redis hash.
+-- Store all reservation fields in a dedicated Redis hash.
 redis.call(
-  'HMSET', 'reservation:' .. reservation_id,
-  'event_id',      event_id,
-  'seats',         seats_json,
-  'status',        'reserved',
-  'user_email',    user_email,
-  'amount',        amount_cents,
-  'reserved_until', expiry_epoch
+  "HSET",
+  reservation_key,
+  "reservation_id", reservation_id,
+  "event_id",       event_id,
+  "user_email",     user_email,
+  "seat_indexes",   seat_indexes_json,  -- kept as JSON for easy retrieval
+  "status",         "reserved",
+  "expires_at",     tostring(expires_epoch)
 )
 
--- Let Redis auto-expire the hash after ttl_seconds as a safety net.
-redis.call('EXPIRE', 'reservation:' .. reservation_id, ttl_seconds)
+-- Auto-expire the hash after ttl_seconds as a memory safety net.
+redis.call("EXPIRE", reservation_key, ttl_seconds)
 
--- Add to the sorted set so the background expiry worker can find it
--- even if the hash TTL fires before the worker polls.
-redis.call('ZADD', 'reservations:ttl', expiry_epoch, reservation_id)
+-- Register in the sorted set so the background worker can sweep expired
+-- reservations even when the hash TTL fires before the worker polls.
+redis.call("ZADD", ttl_key, expires_epoch, reservation_id)
 
--- ── Step 8: Return result to the caller ───────────────────────────────────────
+-- ── Step 5: Return success ────────────────────────────────────────────────────
 
-return {reservation_id, seats_json, expiry_epoch}
+return {"OK", reservation_id}

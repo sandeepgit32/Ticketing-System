@@ -1,10 +1,9 @@
 --[[
-  redis_reserve_explicit.lua
-  --------------------------
+  redis_reserve.lua
+  -----------------
   Atomically reserve a caller-specified set of seat indexes in an event bitmap.
 
-  Unlike redis_reserve.lua (which finds a contiguous free block automatically),
-  this script accepts an explicit list of zero-based seat indexes and either
+  This script accepts a caller-specified list of zero-based seat indexes and either
   reserves all of them or rejects the entire request — there is no partial hold.
 
   Algorithm
