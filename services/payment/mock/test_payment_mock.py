@@ -6,9 +6,10 @@ import pytest
 
 _SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-os.environ.setdefault("WEBHOOK_SECRET", "test-secret")
-os.environ.setdefault("BOOKING_WEBHOOK_URL", "http://localhost:8000/webhook")
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+# Load service environment from .env so required_env() calls in main.py resolve correctly.
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=os.path.join(_SERVICE_DIR, ".env"), override=False)
 
 if _SERVICE_DIR not in sys.path:
     sys.path.insert(0, _SERVICE_DIR)

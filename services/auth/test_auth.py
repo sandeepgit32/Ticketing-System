@@ -4,10 +4,12 @@ import sys
 from datetime import timedelta
 
 import pytest
+from dotenv import load_dotenv
 
 # Load auth's main.py under a unique module name so pytest's shared sys.modules
 # does not collide with other services' main.py files.
 _SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(dotenv_path=os.path.join(_SERVICE_DIR, ".env"), override=False)
 sys.modules.pop("schemas", None)  # avoid cross-service schemas.py conflict
 if _SERVICE_DIR not in sys.path:
     sys.path.insert(0, _SERVICE_DIR)

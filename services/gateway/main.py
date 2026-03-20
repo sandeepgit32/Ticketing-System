@@ -58,9 +58,11 @@ async def proxy_request(
         # Prepare headers
         headers = dict(request.headers)
         headers.pop("host", None)  # Remove host header
-        headers.pop(
-            "authorization", None
-        )  # Strip JWT; downstream services use X-User-Email
+        headers.pop("authorization", None)
+        # Strip JWT; downstream services use X-User-Email
+        # Strip any client-supplied X-User-Email to prevent spoofing;
+        # the header is only set below from the gateway-verified token.
+        headers.pop("x-user-email", None)
 
         # Add user info if authenticated
         if user_info:

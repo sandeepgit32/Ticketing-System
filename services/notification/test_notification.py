@@ -7,13 +7,10 @@ import pytest
 
 _SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# required_env() raises RuntimeError if any var is absent; set before loading.
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("SMTP_HOST", "smtp.example.com")
-os.environ.setdefault("SMTP_PORT", "587")
-os.environ.setdefault("SMTP_USER", "")
-os.environ.setdefault("SMTP_PASSWORD", "")
-os.environ.setdefault("FROM_EMAIL", "noreply@example.com")
+# Load service environment from .env so required_env() calls in main.py resolve correctly.
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=os.path.join(_SERVICE_DIR, ".env"), override=False)
 
 if _SERVICE_DIR not in sys.path:
     sys.path.insert(0, _SERVICE_DIR)

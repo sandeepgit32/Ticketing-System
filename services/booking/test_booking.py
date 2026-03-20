@@ -7,14 +7,10 @@ from fastapi import HTTPException
 
 _SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# required_env() raises RuntimeError for missing vars; set before loading module.
-os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
-os.environ.setdefault("RESERVATION_TTL_SECONDS", "3600")
-os.environ.setdefault("MYSQL_HOST", "localhost")
-os.environ.setdefault("MYSQL_PORT", "3306")
-os.environ.setdefault("MYSQL_USER", "test")
-os.environ.setdefault("MYSQL_PASSWORD", "test")
-os.environ.setdefault("MYSQL_DATABASE", "test")
+# Load environment from .env before the module import so required_env() succeeds.
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=os.path.join(_SERVICE_DIR, ".env"), override=False)
 
 if _SERVICE_DIR not in sys.path:
     sys.path.insert(0, _SERVICE_DIR)

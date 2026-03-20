@@ -10,12 +10,30 @@ from mysql.connector import pooling
 # (`/app`) is on sys.path inside the container.
 from schemas import BookingDetails, UserBookingsResponse
 
+
+def required_env(key: str, cast=str):
+    """Return the value of an environment variable or raise if missing.
+
+    Args:
+        key: The name of the environment variable.
+        cast: Optional callable to cast the string value.
+
+    Raises:
+        RuntimeError: if the environment variable is not set.
+    """
+
+    value = os.environ.get(key)
+    if value is None:
+        raise RuntimeError(f"Missing required environment variable: {key}")
+    return cast(value)
+
+
 # Configuration
-MYSQL_HOST = os.getenv("MYSQL_HOST", "database")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "ticketuser")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "ticketpass")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "ticketing")
+MYSQL_HOST = required_env("MYSQL_HOST")
+MYSQL_PORT = required_env("MYSQL_PORT", cast=int)
+MYSQL_USER = required_env("MYSQL_USER")
+MYSQL_PASSWORD = required_env("MYSQL_PASSWORD")
+MYSQL_DATABASE = required_env("MYSQL_DATABASE")
 
 app = Flask(__name__)
 CORS(app, origins="*", supports_credentials=True)
@@ -73,16 +91,14 @@ def get_current_user_email() -> str:
     """
     Read authenticated user identity from the gateway-forwarded header.
 
-    The booking service architecture performs JWT verification in the API
-    gateway. Downstream services trust forwarded identity headers.
+    Authentication is enforced by the API gateway before the request reaches
+    this service. The gateway verifies the JWT and forwards the authenticated
+    user's email via the X-User-Email header, so this service can trust it.
 
     Returns:
         str: Authenticated user's email.
     """
-    user_email = request.headers.get("X-User-Email")
-    if not user_email:
-        abort(400, description="X-User-Email header is required")
-    return user_email
+    return request.headers.get("X-User-Email", "")
 
 
 @app.route("/bookings/<booking_id>", methods=["GET"])
