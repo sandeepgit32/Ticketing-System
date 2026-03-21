@@ -184,7 +184,7 @@ Return a single venue configuration.
 - `404 Not Found` if venue does not exist.
 
 ### `GET /events`
-Return all events with minimal metadata.
+Return all events with minimal metadata, including available seat count and distinct prices of available seats.
 
 **Response example**:
 ```json
@@ -194,7 +194,9 @@ Return all events with minimal metadata.
       "event_id": "e8d8...",
       "name": "Summer Music Festival",
       "venue": "Central Park Arena",
-      "date": "2026-07-15"
+      "date": "2026-07-15",
+      "num_seats_available": 142,
+      "list_of_prices": [50.0, 75.0, 100.0]
     }
   ]
 }

@@ -57,7 +57,7 @@
         class="event-card"
         @click="selectEvent(event)"
       >        <div class="event-image">
-          <div class="event-badge">{{ event.available_seats || 'N/A' }} seats left</div>
+          <div class="event-badge">{{ event.num_seats_available }} seats left</div>
         </div>
         <div class="event-content">
           <h3 class="event-name">{{ event.name }}</h3>
@@ -72,7 +72,10 @@
             </div>
             <div class="event-detail">
               <span class="detail-icon">💰</span>
-              <span>${{ event.price || 'N/A' }}</span>
+              <span v-if="event.list_of_prices && event.list_of_prices.length">
+                From ₹{{ event.list_of_prices[0] }}
+              </span>
+              <span v-else>N/A</span>
             </div>
           </div>
         </div>

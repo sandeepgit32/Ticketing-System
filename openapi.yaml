@@ -1267,7 +1267,7 @@ components:
           type: array
           items:
             type: object
-            required: [event_id, name, venue, date]
+            required: [event_id, name, venue, date, num_seats_available, list_of_prices]
             properties:
               event_id:
                 type: string
@@ -1282,6 +1282,17 @@ components:
                 type: string
                 format: date
                 example: "2026-06-15"
+              num_seats_available:
+                type: integer
+                description: Number of unoccupied seats for this event.
+                example: 142
+              list_of_prices:
+                type: array
+                description: Distinct prices of currently available (unoccupied) seats, sorted ascending.
+                items:
+                  type: number
+                  format: float
+                example: [50.0, 75.0, 100.0]
 
     CreateEventRequest:
       type: object

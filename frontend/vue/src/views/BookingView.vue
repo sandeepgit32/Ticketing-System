@@ -13,9 +13,11 @@
         <BaseCard title="Select Your Seats">
           <div class="seat-selection">
             <div class="seat-meta">
-              <div><strong>Event:</strong> {{ eventName }}</div>
-              <div v-if="bookingStore.currentEvent">Venue: {{ bookingStore.currentEvent.venue }}</div>
-              <div v-if="bookingStore.currentEvent">Starts at: {{ bookingStore.currentEvent.start_time }}</div>
+              <h2 class="event-title">{{ eventName || 'Untitled Event' }}</h2>
+              <p class="event-details">{{ bookingStore.currentEvent?.venue || 'Unknown Venue' }}</p>
+              <p class="event-details" v-if="bookingStore.currentEvent?.start_time">
+                {{ formatEventDateTime(bookingStore.currentEvent.start_time) }}
+              </p>
             </div>
 
             <div class="seat-map">
@@ -68,7 +70,7 @@
               </div>
               <div class="summary-row">
                 <span>Total:</span>
-                <strong>${{ totalPrice }}</strong>
+                <strong>₹{{ totalPrice }}</strong>
               </div>
             </div>
           </div>
@@ -101,7 +103,7 @@
               </div>
               <div class="detail-row">
                 <span>Total Amount:</span>
-                <strong>${{ totalPrice }}</strong>
+                <strong>₹{{ totalPrice }}</strong>
               </div>
             </div>
 
@@ -160,7 +162,7 @@
               </div>
               <div class="detail-row">
                 <span>Amount Paid:</span>
-                <strong>${{ totalPrice }}</strong>
+                <strong>₹{{ totalPrice }}</strong>
               </div>
             </div>
 
@@ -216,6 +218,20 @@ const totalPrice = computed(() => {
     return sum + price
   }, 0)
 })
+
+const formatEventDateTime = (dateString) => {
+  if (!dateString) return ''
+
+  const d = new Date(dateString)
+  return d.toLocaleString('en-IN', {
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
 
 const getSeatStatus = (seatId) => {
   if (!bookingStore.currentEvent) return 'occupied'

@@ -691,8 +691,10 @@ async def get_venue(venue_name: str):
 async def list_events():
     """Return a list of events stored in the database.
 
-    The endpoint returns minimal metadata per event (id, name, venue, date) and
-    normalizes timestamps to ISO 8601 dates.
+    The endpoint returns minimal metadata per event (event_id, name, venue, date,
+    num_seats_available, list_of_prices) and normalizes timestamps to ISO 8601
+    dates.  Seat availability and pricing are aggregated in a single SQL query
+    via a LEFT JOIN on the seats table.
     """
     events = []
 
@@ -701,7 +703,14 @@ async def list_events():
 
     try:
         rows_db = fetch_all(
-            database_pool, "SELECT event_id, name, start_time, venue FROM events"
+            database_pool,
+            """SELECT e.event_id, e.name, e.start_time, e.venue,
+                      COUNT(CASE WHEN s.occupied = 0 THEN 1 END) AS num_seats_available,
+                      GROUP_CONCAT(DISTINCT CASE WHEN s.occupied = 0 THEN s.price END
+                                   ORDER BY s.price) AS available_prices
+               FROM events e
+               LEFT JOIN seats s ON s.event_id = e.event_id
+               GROUP BY e.event_id, e.name, e.start_time, e.venue""",
         )
 
         for event in rows_db:
@@ -719,12 +728,22 @@ async def list_events():
 
             # Only include minimal fields for the list endpoint
             date_only = start_iso.split("T")[0] if "T" in start_iso else start_iso
+
+            raw_prices = event.get("available_prices")
+            list_of_prices = (
+                sorted({float(p) for p in raw_prices.split(",") if p})
+                if raw_prices
+                else []
+            )
+
             events.append(
                 {
                     "event_id": event.get("event_id"),
                     "name": event.get("name"),
                     "venue": venue_name,
                     "date": date_only,
+                    "num_seats_available": int(event.get("num_seats_available") or 0),
+                    "list_of_prices": list_of_prices,
                 }
             )
     except Exception as e:

@@ -161,7 +161,9 @@ Return a list of all events. Public endpoint.
       "event_id": "evt-abc123",
       "name": "Rock Concert 2026",
       "venue": "Sample Stadium",
-      "date": "2026-06-15"
+      "date": "2026-06-15",
+      "num_seats_available": 142,
+      "list_of_prices": [50.0, 75.0]
     }
   ]
 }
