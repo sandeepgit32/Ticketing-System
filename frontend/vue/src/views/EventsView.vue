@@ -4,14 +4,14 @@
       <h1 class="events-title">Available Events</h1>
       <p class="events-subtitle">Select an event to book your seats</p>
 
-      <div class="add-event-actions">
+      <div v-if="canManageEvents" class="add-event-actions">
         <BaseButton variant="success" @click="toggleAddEventForm">
           {{ showAddEventForm ? 'Close Form' : 'Add New Event' }}
         </BaseButton>
       </div>
     </div>
 
-    <div v-if="showAddEventForm" class="add-event-form">
+    <div v-if="canManageEvents && showAddEventForm" class="add-event-form">
       <BaseCard title="Create New Event">
         <div class="form-row">
           <label for="event-name">Name</label>
@@ -96,13 +96,15 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { bookingAPI } from '../services/api'
+import { useAuthStore } from '../stores/auth'
 import BaseCard from '../components/BaseCard.vue'
 import BaseButton from '../components/BaseButton.vue'
 
 const router = useRouter()
+const authStore = useAuthStore()
 
 const events = ref([])
 const venues = ref([])
@@ -114,6 +116,7 @@ const creatingEvent = ref(false)
 const createError = ref('')
 const createSuccess = ref('')
 const newEvent = ref({ name: '', venue: '', start_time: '' })
+const canManageEvents = computed(() => authStore.isAdmin)
 
 const formatDate = (dateString) => {
   const date = new Date(dateString)
@@ -159,6 +162,7 @@ const resetNewEvent = () => {
 }
 
 const toggleAddEventForm = () => {
+  if (!canManageEvents.value) return
   showAddEventForm.value = !showAddEventForm.value
   if (!showAddEventForm.value) {
     resetNewEvent()
@@ -201,6 +205,9 @@ const selectEvent = (event) => {
 }
 
 onMounted(async () => {
+  if (authStore.isAuthenticated && !authStore.user?.role) {
+    await authStore.verifyToken()
+  }
   await Promise.all([loadEvents(), loadVenues()])
 })
 </script>

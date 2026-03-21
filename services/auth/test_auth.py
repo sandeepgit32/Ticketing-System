@@ -36,14 +36,53 @@ def test_hash_and_verify_password():
 
 
 def test_create_and_decode_access_token():
-    payload = {"sub": "user-abc", "email": "user@example.com"}
+    payload = {"sub": "user-abc", "email": "user@example.com", "role": "Admin"}
     token = create_access_token(payload, expires_delta=timedelta(minutes=2))
 
     decoded = decode_token(token)
     assert decoded["sub"] == payload["sub"]
     assert decoded["email"] == payload["email"]
+    assert decoded["role"] == payload["role"]
 
 
 def test_decode_token_invalid_raises_http_exception():
     with pytest.raises(Exception):
         decode_token("this-is-not-a-jwt")
+
+
+def test_seed_default_admin_user_upserts_admin(monkeypatch):
+    captured = {}
+
+    class FakeCursor:
+        def execute(self, query, params=None):
+            captured["query"] = query
+            captured["params"] = params
+
+        def close(self):
+            captured["cursor_closed"] = True
+
+    class FakeConn:
+        def cursor(self, dictionary=True):
+            captured["dictionary"] = dictionary
+            return FakeCursor()
+
+        def commit(self):
+            captured["committed"] = True
+
+        def close(self):
+            captured["conn_closed"] = True
+
+    monkeypatch.setattr(_mod, "get_db_connection", lambda: FakeConn())
+    monkeypatch.setattr(_mod, "hash_password", lambda password: f"hashed:{password}")
+
+    _mod.seed_default_admin_user()
+
+    assert "INSERT INTO users" in captured["query"]
+    assert "ON DUPLICATE KEY UPDATE" in captured["query"]
+    assert captured["params"][1] == _mod.DEFAULT_ADMIN_EMAIL
+    assert captured["params"][2] == f"hashed:{_mod.DEFAULT_ADMIN_PASSWORD}"
+    assert captured["params"][3] == _mod.DEFAULT_ADMIN_FULL_NAME
+    assert captured["params"][4] == "Admin"
+    assert captured["committed"] is True
+    assert captured["cursor_closed"] is True
+    assert captured["conn_closed"] is True

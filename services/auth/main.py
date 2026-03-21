@@ -45,6 +45,9 @@ MYSQL_PORT = required_env("MYSQL_PORT", int)
 MYSQL_USER = required_env("MYSQL_USER")
 MYSQL_PASSWORD = required_env("MYSQL_PASSWORD")
 MYSQL_DATABASE = required_env("MYSQL_DATABASE")
+DEFAULT_ADMIN_EMAIL = required_env("DEFAULT_ADMIN_EMAIL")
+DEFAULT_ADMIN_PASSWORD = required_env("DEFAULT_ADMIN_PASSWORD")
+DEFAULT_ADMIN_FULL_NAME = os.environ.get("DEFAULT_ADMIN_FULL_NAME", "System Admin")
 
 app = FastAPI(title="Auth Service")
 
@@ -74,6 +77,42 @@ def get_db_connection():
         mysql.connector.connection.MySQLConnection: a connection object.
     """
     return db_pool.get_connection()
+
+
+def seed_default_admin_user() -> None:
+    """Create or overwrite the default admin user from environment values."""
+    conn = get_db_connection()
+    cursor = conn.cursor(dictionary=True)
+
+    try:
+        import uuid
+
+        admin_user_id = str(uuid.uuid4())
+        admin_password_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
+
+        cursor.execute(
+            """
+            INSERT INTO users (user_id, email, password_hash, full_name, user_role)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                password_hash = VALUES(password_hash),
+                full_name = VALUES(full_name),
+                user_role = VALUES(user_role),
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                admin_user_id,
+                DEFAULT_ADMIN_EMAIL,
+                admin_password_hash,
+                DEFAULT_ADMIN_FULL_NAME,
+                "Admin",
+            ),
+        )
+        conn.commit()
+        print(f"Ensured default admin user exists for {DEFAULT_ADMIN_EMAIL}")
+    finally:
+        cursor.close()
+        conn.close()
 
 
 @app.on_event("startup")
@@ -106,6 +145,7 @@ async def startup_event():
                 database=MYSQL_DATABASE,
             )
             print("Connected to database")
+            seed_default_admin_user()
             break
         except Exception as e:
             if i < max_retries - 1:
@@ -164,7 +204,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
     Build and sign a JWT access token using HS256.
 
     Args:
-        data (dict): Claims to include in the token payload (e.g. sub, email).
+        data (dict): Claims to include in the token payload (e.g. sub, email, role).
         expires_delta (Optional[timedelta]): Optional expiration delta. If
             omitted the global `ACCESS_TOKEN_EXPIRE_MINUTES` is used.
 
@@ -278,14 +318,14 @@ async def register(req: RegisterRequest):
         password_hash = hash_password(req.password)
 
         cursor.execute(
-            "INSERT INTO users (user_id, email, password_hash, full_name) VALUES (%s, %s, %s, %s)",
-            (user_id, req.email, password_hash, req.full_name),
+            "INSERT INTO users (user_id, email, password_hash, full_name, user_role) VALUES (%s, %s, %s, %s, %s)",
+            (user_id, req.email, password_hash, req.full_name, "User"),
         )
         conn.commit()
 
         # Fetch the created user
         cursor.execute(
-            "SELECT user_id, email, full_name, created_at FROM users WHERE user_id = %s",
+            "SELECT user_id, email, full_name, user_role, created_at FROM users WHERE user_id = %s",
             (user_id,),
         )
         user = cursor.fetchone()
@@ -294,6 +334,7 @@ async def register(req: RegisterRequest):
             user_id=user["user_id"],
             email=user["email"],
             full_name=user["full_name"],
+            role=user.get("user_role", "User"),
             created_at=user["created_at"].isoformat(),
         )
     finally:
@@ -322,7 +363,7 @@ async def login(req: LoginRequest):
     try:
         # Find user
         cursor.execute(
-            "SELECT user_id, email, password_hash, full_name FROM users WHERE email = %s",
+            "SELECT user_id, email, password_hash, full_name, user_role FROM users WHERE email = %s",
             (req.email,),
         )
         user = cursor.fetchone()
@@ -340,6 +381,7 @@ async def login(req: LoginRequest):
                 "sub": user["user_id"],
                 "email": user["email"],
                 "full_name": user["full_name"],
+                "role": user.get("user_role", "User"),
             },
             expires_delta=access_token_expires_at,
         )
@@ -384,6 +426,7 @@ async def verify_token(current_user: dict = Depends(get_current_user)):
         "user_id": current_user.get("sub"),
         "email": current_user.get("email"),
         "full_name": current_user.get("full_name"),
+        "role": current_user.get("role", "User"),
     }
 
 

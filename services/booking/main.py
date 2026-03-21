@@ -214,6 +214,16 @@ def build_seat_index_map(venue_cfg: Optional[dict]) -> dict:
     return {seat_id: idx for idx, seat_id in enumerate(seat_order)}
 
 
+def _require_admin_role(
+    x_user_email: Optional[str], x_user_role: Optional[str]
+) -> None:
+    """Ensure the caller is authenticated and has the admin role."""
+    if not x_user_email:
+        raise HTTPException(status_code=401, detail="x_user_email is required")
+    if (x_user_role or "") != "Admin":
+        raise HTTPException(status_code=403, detail="Admin role required")
+
+
 def _reservation_redis_keys(event_id: str, reservation_id: str) -> tuple[str, str, str]:
     """Return the three Redis key names used for a reservation.
 
@@ -842,12 +852,18 @@ async def get_event(event_id: str):
 
 
 @app.post("/events", status_code=201)
-async def create_event(req: CreateEventRequest):
+async def create_event(
+    req: CreateEventRequest,
+    x_user_email: Optional[str] = Header(None),
+    x_user_role: Optional[str] = Header(None),
+):
     """Create a new event record.
 
     This endpoint stores event metadata in MySQL and pre-populates the `seats`
     table for the event using the configured venue layout and pricing.
     """
+    _require_admin_role(x_user_email, x_user_role)
+
     event_id = str(uuid.uuid4())
 
     if req.venue and venues_config.get(req.venue) is None:
@@ -890,8 +906,14 @@ async def create_event(req: CreateEventRequest):
 
 
 @app.get("/events/{event_id}/close")
-async def close_event(event_id: str):
+async def close_event(
+    event_id: str,
+    x_user_email: Optional[str] = Header(None),
+    x_user_role: Optional[str] = Header(None),
+):
     """Close an event after it has started and clean up runtime state."""
+    _require_admin_role(x_user_email, x_user_role)
+
     database_pool = require_db_pool(db_pool)
 
     conn = database_pool.get_connection()

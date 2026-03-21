@@ -14,6 +14,7 @@
         </div>
 
         <div class="nav-user">
+          <span v-if="authStore.user?.role" class="user-role">{{ authStore.user.role }}</span>
           <span class="user-email">{{ authStore.user?.email }}</span>
           <button @click="handleLogout" class="logout-button">Logout</button>
         </div>
@@ -27,6 +28,7 @@
 </template>
 
 <script setup>
+import { onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from './stores/auth'
 
@@ -37,6 +39,12 @@ const handleLogout = () => {
   authStore.logout()
   router.push('/login')
 }
+
+onMounted(async () => {
+  if (authStore.isAuthenticated) {
+    await authStore.verifyToken()
+  }
+})
 </script>
 
 <style>
@@ -129,6 +137,18 @@ body {
 .user-email {
   color: #6b7280;
   font-size: 0.875rem;
+}
+
+.user-role {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.5rem;
+  border-radius: 9999px;
+  background: #e0e7ff;
+  color: #3730a3;
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 .logout-button {

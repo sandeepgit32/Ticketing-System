@@ -9,6 +9,12 @@ export const useAuthStore = defineStore('auth', () => {
   const error = ref(null)
 
   const isAuthenticated = computed(() => !!token.value)
+  const isAdmin = computed(() => user.value?.role === 'Admin')
+
+  const storeUser = (userData) => {
+    user.value = userData
+    localStorage.setItem('user', JSON.stringify(user.value))
+  }
 
   const login = async (credentials) => {
     loading.value = true
@@ -18,10 +24,13 @@ export const useAuthStore = defineStore('auth', () => {
       const { access_token } = response.data
       token.value = access_token
       localStorage.setItem('access_token', access_token)
-      
-      // Store user email
-      user.value = { email: credentials.email }
-      localStorage.setItem('user', JSON.stringify(user.value))
+
+      const verifyResponse = await authAPI.verify()
+      storeUser({
+        email: verifyResponse.data?.email || credentials.email,
+        full_name: verifyResponse.data?.full_name || '',
+        role: verifyResponse.data?.role || 'User'
+      })
       
       return true
     } catch (err) {
@@ -57,7 +66,12 @@ export const useAuthStore = defineStore('auth', () => {
   const verifyToken = async () => {
     if (!token.value) return false
     try {
-      await authAPI.verify()
+      const response = await authAPI.verify()
+      storeUser({
+        email: response.data?.email || user.value?.email || '',
+        full_name: response.data?.full_name || user.value?.full_name || '',
+        role: response.data?.role || user.value?.role || 'User'
+      })
       return true
     } catch (err) {
       logout()
@@ -71,6 +85,7 @@ export const useAuthStore = defineStore('auth', () => {
     loading,
     error,
     isAuthenticated,
+    isAdmin,
     login,
     register,
     logout,

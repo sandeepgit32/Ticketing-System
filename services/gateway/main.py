@@ -52,13 +52,15 @@ async def proxy_request(
     request: Request,
     target_url: str,
     user_info: dict = None,
+    preserve_authorization: bool = False,
 ):
     """Proxy request to target service"""
     try:
         # Prepare headers
         headers = dict(request.headers)
         headers.pop("host", None)  # Remove host header
-        headers.pop("authorization", None)
+        if not preserve_authorization:
+            headers.pop("authorization", None)
         # Strip JWT; downstream services use X-User-Email
         # Strip any client-supplied X-User-Email to prevent spoofing;
         # the header is only set below from the gateway-verified token.
@@ -67,6 +69,7 @@ async def proxy_request(
         # Add user info if authenticated
         if user_info:
             headers["X-User-Email"] = user_info.get("email", "")
+            headers["X-User-Role"] = user_info.get("role", "User")
 
         # Get request body
         body = await request.body()
@@ -160,7 +163,7 @@ async def auth_login(request: Request):
 async def auth_verify(request: Request):
     """Verify JWT token"""
     target_url = f"{AUTH_SERVICE_URL}/verify"
-    return await proxy_request(request, target_url)
+    return await proxy_request(request, target_url, preserve_authorization=True)
 
 
 # ============== Booking Service Routes ==============
@@ -201,6 +204,10 @@ async def create_event(request: Request, user_info: dict = Depends(verify_token)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
         )
+    if user_info.get("role") != "Admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required"
+        )
 
     target_url = f"{BOOKING_SERVICE_URL}/events"
     return await proxy_request(request, target_url, user_info=user_info)
@@ -214,6 +221,10 @@ async def close_event(
     if not user_info:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"
+        )
+    if user_info.get("role") != "Admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Admin role required"
         )
 
     target_url = f"{BOOKING_SERVICE_URL}/events/{event_id}/close"
