@@ -3,6 +3,47 @@
     <div class="events-header">
       <h1 class="events-title">Available Events</h1>
       <p class="events-subtitle">Select an event to book your seats</p>
+
+      <div class="add-event-actions">
+        <BaseButton variant="success" @click="toggleAddEventForm">
+          {{ showAddEventForm ? 'Close Form' : 'Add New Event' }}
+        </BaseButton>
+      </div>
+    </div>
+
+    <div v-if="showAddEventForm" class="add-event-form">
+      <BaseCard title="Create New Event">
+        <div class="form-row">
+          <label for="event-name">Name</label>
+          <input id="event-name" v-model="newEvent.name" type="text" placeholder="Event name" />
+        </div>
+
+        <div class="form-row">
+          <label for="event-venue">Venue</label>
+          <select id="event-venue" v-model="newEvent.venue">
+            <option value="" disabled>Select venue</option>
+            <option v-for="venue in venues" :key="venue.name" :value="venue.name">{{ venue.name }}</option>
+          </select>
+          <small v-if="!venues.length" class="hint">No venues loaded; type a valid venue name</small>
+        </div>
+
+        <div class="form-row">
+          <label for="event-start">Start time</label>
+          <input id="event-start" v-model="newEvent.start_time" type="datetime-local" />
+        </div>
+
+        <div class="form-status">
+          <p v-if="createError" class="error-state">{{ createError }}</p>
+          <p v-if="createSuccess" class="success-state">{{ createSuccess }}</p>
+        </div>
+
+        <template #footer>
+          <div class="form-actions">
+            <BaseButton variant="secondary" @click="toggleAddEventForm">Cancel</BaseButton>
+            <BaseButton :loading="creatingEvent" variant="primary" @click="createEvent">Create Event</BaseButton>
+          </div>
+        </template>
+      </BaseCard>
     </div>
 
     <div v-if="isLoading" class="loading-state">Loading events...</div>
@@ -61,8 +102,15 @@ import BaseButton from '../components/BaseButton.vue'
 const router = useRouter()
 
 const events = ref([])
+const venues = ref([])
 const errorMessage = ref('')
 const isLoading = ref(false)
+
+const showAddEventForm = ref(false)
+const creatingEvent = ref(false)
+const createError = ref('')
+const createSuccess = ref('')
+const newEvent = ref({ name: '', venue: '', start_time: '' })
 
 const formatDate = (dateString) => {
   const date = new Date(dateString)
@@ -76,11 +124,7 @@ const formatDate = (dateString) => {
   })
 }
 
-const selectEvent = (event) => {
-  router.push(`/events/${event.event_id}`)
-}
-
-onMounted(async () => {
+const loadEvents = async () => {
   isLoading.value = true
   try {
     const response = await bookingAPI.listEvents()
@@ -93,6 +137,68 @@ onMounted(async () => {
   } finally {
     isLoading.value = false
   }
+}
+
+const loadVenues = async () => {
+  try {
+    const response = await bookingAPI.listVenues()
+    venues.value = response.data?.venues || []
+  } catch (error) {
+    console.warn('Failed to load venues list.', error)
+    venues.value = []
+  }
+}
+
+const resetNewEvent = () => {
+  newEvent.value = { name: '', venue: '', start_time: '' }
+  createError.value = ''
+  createSuccess.value = ''
+}
+
+const toggleAddEventForm = () => {
+  showAddEventForm.value = !showAddEventForm.value
+  if (!showAddEventForm.value) {
+    resetNewEvent()
+  }
+}
+
+const createEvent = async () => {
+  createError.value = ''
+  createSuccess.value = ''
+
+  if (!newEvent.value.name || !newEvent.value.venue || !newEvent.value.start_time) {
+    createError.value = 'Please fill in all fields.'
+    return
+  }
+
+  creatingEvent.value = true
+
+  try {
+    const payload = {
+      name: newEvent.value.name,
+      venue: newEvent.value.venue,
+      start_time: newEvent.value.start_time
+    }
+
+    await bookingAPI.createEvent(payload)
+    createSuccess.value = 'Event created successfully.'
+    resetNewEvent()
+    showAddEventForm.value = false
+    await loadEvents()
+  } catch (error) {
+    console.error('Failed to create event.', error)
+    createError.value = error.response?.data?.detail || 'Unable to create event. Please try again.'
+  } finally {
+    creatingEvent.value = false
+  }
+}
+
+const selectEvent = (event) => {
+  router.push(`/events/${event.event_id}`)
+}
+
+onMounted(async () => {
+  await Promise.all([loadEvents(), loadVenues()])
 })
 </script>
 
@@ -210,4 +316,46 @@ onMounted(async () => {
   color: #6b7280;
   margin: 0;
 }
-</style>
+
+.add-event-actions {
+  margin-top: 1rem;
+  text-align: center;
+}
+
+.add-event-form {
+  margin-bottom: 2rem;
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.form-row input,
+.form-row select {
+  width: 100%;
+  padding: 0.5rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.375rem;
+  font-size: 1rem;
+}
+
+.form-status {
+  margin-bottom: 1rem;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+}
+
+.success-state {
+  color: #166534;
+}
+
+.error-state {
+  color: #b91c1c;
+}</style>
