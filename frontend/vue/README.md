@@ -1,6 +1,6 @@
-# Frontend - Vue.js Ticketing System
+# Frontend - Vue.js BookEventTicket
 
-A modern, professional Vue.js frontend for the ticketing system with complete authentication, booking flow, and state management.
+A modern, professional Vue.js frontend for the booking platform with complete authentication, booking flow, and state management.
 
 ## Features
 

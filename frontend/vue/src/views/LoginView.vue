@@ -1,6 +1,11 @@
 <template>
   <div class="auth-container">
     <BaseCard class="auth-card">
+      <div class="auth-brand">
+        <img class="auth-logo" src="/logo.png" alt="BookEventTicket logo" />
+        <p class="auth-brand-name">BookEventTicket</p>
+      </div>
+
       <div class="auth-header">
         <h1 class="auth-title">{{ isLogin ? 'Welcome Back' : 'Create Account' }}</h1>
         <p class="auth-subtitle">
@@ -153,6 +158,28 @@ const handleSubmit = async () => {
 .auth-card {
   width: 100%;
   max-width: 420px;
+}
+
+.auth-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.auth-logo {
+  width: 6.25rem;
+  height: 6.25rem;
+  object-fit: contain;
+}
+
+.auth-brand-name {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #111827;
 }
 
 .auth-header {

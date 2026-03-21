@@ -46,7 +46,11 @@
       </BaseCard>
     </div>
 
-    <div v-if="isLoading" class="loading-state">Loading events...</div>
+    <div v-if="isLoading" class="loading-state">
+      <img class="loading-logo" src="/logo.png" alt="BookEventTicket logo" />
+      <div class="spinner-large"></div>
+      <p>Loading events...</p>
+    </div>
     <div v-if="errorMessage" class="error-state">{{ errorMessage }}</div>
 
     <div class="events-grid" v-else>
@@ -235,6 +239,38 @@ onMounted(async () => {
   font-size: 1.125rem;
   color: #6b7280;
   margin: 0;
+}
+
+.loading-state {
+  text-align: center;
+  padding: 4rem 2rem;
+}
+
+.loading-logo {
+  width: 5.75rem;
+  height: 5.75rem;
+  object-fit: contain;
+  margin: 0 auto 1rem;
+  display: block;
+}
+
+.spinner-large {
+  width: 50px;
+  height: 50px;
+  border: 5px solid rgba(102, 126, 234, 0.3);
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  margin: 0 auto 1rem;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loading-state p {
+  color: #6b7280;
+  font-size: 1.125rem;
 }
 
 .events-grid {

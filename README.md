@@ -1,6 +1,6 @@
-# Ticketing System (Flash Sale)
+# BookEventTicket (Flash Sale)
 
-This repository contains a complete microservices-based ticketing system designed to handle flash-sale style events. The system includes authentication, booking management, payment processing, notifications, and a complete API gateway architecture.
+This repository contains a complete microservices-based booking platform designed to handle flash-sale style events. The system includes authentication, booking management, payment processing, notifications, and a complete API gateway architecture.
 
 ## System Architecture
 

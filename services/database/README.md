@@ -1,6 +1,6 @@
 # Database Service
 
-This service provides the MySQL database for the ticketing system with automatic schema initialization.
+This service provides the MySQL database for BookEventTicket with automatic schema initialization.
 
 ## Overview
 

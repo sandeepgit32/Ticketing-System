@@ -1,6 +1,6 @@
 # Auth Service
 
-This microservice handles user authentication and registration for the ticketing system.
+This microservice handles user authentication and registration for BookEventTicket.
 
 ## Responsibilities
 

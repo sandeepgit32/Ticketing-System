@@ -1,6 +1,6 @@
 # Notification Service
 
-This microservice sends transactional emails (reservation confirmations, payment receipts, etc.) for the ticketing system.
+This microservice sends transactional emails (reservation confirmations, payment receipts, etc.) for BookEventTicket.
 
 It operates as a background worker that reads notification messages from a Redis queue and sends emails via SMTP (Mailtrap by default).
 

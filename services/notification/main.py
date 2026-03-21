@@ -140,7 +140,7 @@ Expires At: {expires_at}
 
 Please complete your payment before the reservation expires.
 
-Thank you for using our ticketing system!
+Thank you for using BookEventTicket!
     """
 
     html_body = f"""
@@ -156,7 +156,7 @@ Thank you for using our ticketing system!
     <p><strong>Expires At:</strong> {expires_at}</p>
     <p style="color: #ff5722;">⏰ Please complete your payment before the reservation expires.</p>
     <hr style="border: 1px solid #eee;">
-    <p style="font-size: 12px; color: #666;">Thank you for using our ticketing system!</p>
+    <p style="font-size: 12px; color: #666;">Thank you for using BookEventTicket!</p>
 </body>
 </html>
     """

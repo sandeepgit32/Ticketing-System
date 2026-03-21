@@ -1,6 +1,6 @@
 # Booking Service
 
-This microservice manages event inventory and seat reservations for the ticketing system. It stores event and seat state in MySQL, uses Redis for fast runtime state and queues, and coordinates payment capture/webhook workflows.
+This microservice manages event inventory and seat reservations for BookEventTicket. It stores event and seat state in MySQL, uses Redis for fast runtime state and queues, and coordinates payment capture/webhook workflows.
 
 ## Responsibilities
 

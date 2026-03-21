@@ -1,4 +1,4 @@
--- Initialize all database tables for the ticketing system
+-- Initialize all database tables for BookEventTicket
 
 -- Users table (for authentication)
 CREATE TABLE IF NOT EXISTS users (

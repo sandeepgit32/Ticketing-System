@@ -1,9 +1,9 @@
 openapi: 3.1.0
 info:
-  title: Ticketing System API
+  title: BookEventTicket API
   version: 1.0.0
   description: |
-    REST API for the Ticketing System — a microservices-based event ticketing platform.
+    REST API for BookEventTicket — a microservices-based event booking platform.
 
     All requests are made through the **API Gateway** at `http://localhost:8000`.
     The gateway handles JWT verification and forwards requests to the appropriate
