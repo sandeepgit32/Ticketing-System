@@ -46,6 +46,7 @@ export const authAPI = {
 
 // Booking API
 export const bookingAPI = {
+  listEvents: () => apiClient.get('/booking/events'),
   getEvent: (eventId) => apiClient.get(`/booking/events/${eventId}`),
   reserve: (data) => apiClient.post('/booking/bookings/reserve', data),
   capturePayment: (data) => apiClient.post('/booking/payments/capture', data)
@@ -53,7 +54,6 @@ export const bookingAPI = {
 
 // Booking Status API
 export const statusAPI = {
-  getReservation: (reservationId) => apiClient.get(`/status/${reservationId}`),
   getBooking: (bookingId) => apiClient.get(`/status/bookings/${bookingId}`),
   getUserBookings: (params) => apiClient.get('/status/user/bookings', { params })
 }

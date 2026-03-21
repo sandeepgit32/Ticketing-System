@@ -24,14 +24,13 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
-  const reserveSeats = async (eventId, numSeats, preferredRows = []) => {
+  const reserveSeats = async (eventId, selectedSeats) => {
     loading.value = true
     error.value = null
     try {
       const response = await bookingAPI.reserve({
         event_id: eventId,
-        num_seats: numSeats,
-        preferred_rows: preferredRows
+        selected_seats: selectedSeats
       })
       reservation.value = response.data
       return response.data
@@ -43,13 +42,14 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
-  const capturePayment = async (reservationId, paymentMethod = 'card') => {
+  const capturePayment = async (reservationId, amount, currency = 'USD') => {
     loading.value = true
     error.value = null
     try {
       const response = await bookingAPI.capturePayment({
-        reservation_id: reservationId,
-        payment_method: paymentMethod
+        intent_id: reservationId,
+        amount,
+        currency
       })
       return response.data
     } catch (err) {
@@ -75,15 +75,6 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
-  const getReservationStatus = async (reservationId) => {
-    try {
-      const response = await statusAPI.getReservation(reservationId)
-      return response.data
-    } catch (err) {
-      throw err
-    }
-  }
-
   const clearReservation = () => {
     reservation.value = null
   }
@@ -98,7 +89,6 @@ export const useBookingStore = defineStore('booking', () => {
     reserveSeats,
     capturePayment,
     loadUserBookings,
-    getReservationStatus,
     clearReservation
   }
 })

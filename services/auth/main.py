@@ -4,29 +4,47 @@ from typing import Optional
 
 import bcrypt
 import jwt
-import mysql.connector
+
+# import mysql.connector
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from mysql.connector import pooling
-from pydantic import BaseModel, EmailStr
 
 # In the Docker container we start the service with `uvicorn main:app`
 # from the `/app` working directory. the module is therefore imported as
 # top‑level `main` and a simple `from schemas import …` works reliably.
 # keeping this explicit avoids any relative‑import drama inside the container.
-from schemas import RegisterRequest, LoginRequest, TokenResponse, UserResponse
+from schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse
+
+
+def required_env(key: str, cast=str):
+    """Return the value of an environment variable or raise if missing.
+
+    Args:
+        key: The name of the environment variable.
+        cast: Optional callable to cast the string value.
+
+    Raises:
+        RuntimeError: if the environment variable is not set.
+    """
+
+    value = os.environ.get(key)
+    if value is None:
+        raise RuntimeError(f"Missing required environment variable: {key}")
+    return cast(value)
+
 
 # Configuration
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
+SECRET_KEY = required_env("JWT_SECRET_KEY")
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
+ACCESS_TOKEN_EXPIRE_MINUTES = required_env("ACCESS_TOKEN_EXPIRE_MINUTES", cast=int)
 
-MYSQL_HOST = os.getenv("MYSQL_HOST", "database")
-MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
-MYSQL_USER = os.getenv("MYSQL_USER", "ticketuser")
-MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "ticketpass")
-MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "ticketing")
+MYSQL_HOST = required_env("MYSQL_HOST")
+MYSQL_PORT = required_env("MYSQL_PORT", int)
+MYSQL_USER = required_env("MYSQL_USER")
+MYSQL_PASSWORD = required_env("MYSQL_PASSWORD")
+MYSQL_DATABASE = required_env("MYSQL_DATABASE")
 
 app = FastAPI(title="Auth Service")
 

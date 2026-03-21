@@ -8,13 +8,12 @@
     <div class="events-grid">
       <BaseCard
         v-for="event in events"
-        :key="event.id"
+        :key="event.event_id"
         hover
         class="event-card"
         @click="selectEvent(event)"
-      >
-        <div class="event-image">
-          <div class="event-badge">{{ event.available_seats }} seats left</div>
+      >        <div class="event-image">
+          <div class="event-badge">{{ event.available_seats || 'N/A' }} seats left</div>
         </div>
         <div class="event-content">
           <h3 class="event-name">{{ event.name }}</h3>
@@ -29,9 +28,8 @@
             </div>
             <div class="event-detail">
               <span class="detail-icon">💰</span>
-              <span>${{ event.price }}</span>
+              <span>${{ event.price || 'N/A' }}</span>
             </div>
-          </div>
         </div>
         <template #footer>
           <BaseButton variant="primary" block @click.stop="selectEvent(event)">
@@ -52,15 +50,15 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import { bookingAPI } from '../services/api'
 import BaseCard from '../components/BaseCard.vue'
 import BaseButton from '../components/BaseButton.vue'
 
 const router = useRouter()
 
-// Mock events data - in production, this would come from an API
 const events = ref([
   {
-    id: 'event123',
+    event_id: 'event123',
     name: 'Summer Music Festival 2026',
     date: '2026-07-15T19:00:00',
     venue: 'Central Stadium',
@@ -69,7 +67,7 @@ const events = ref([
     total_seats: 500
   },
   {
-    id: 'event456',
+    event_id: 'event456',
     name: 'Tech Conference 2026',
     date: '2026-08-20T09:00:00',
     venue: 'Convention Center',
@@ -78,7 +76,7 @@ const events = ref([
     total_seats: 200
   },
   {
-    id: 'event789',
+    event_id: 'event789',
     name: 'Comedy Night Special',
     date: '2026-09-10T20:00:00',
     venue: 'Downtown Theater',
@@ -101,12 +99,45 @@ const formatDate = (dateString) => {
 }
 
 const selectEvent = (event) => {
-  router.push(`/events/${event.id}`)
+  router.push(`/events/${event.event_id}`)
 }
 
-onMounted(() => {
-  // In production, load events from API
-  console.log('Events loaded')
+onMounted(async () => {
+  try {
+    const response = await bookingAPI.listEvents()
+    events.value = response.data?.events || []
+  } catch (error) {
+    console.error('Failed to load events from API, falling back to local data.', error)
+    events.value = [
+      {
+        event_id: 'event123',
+        name: 'Summer Music Festival 2026',
+        date: '2026-07-15',
+        venue: 'Central Stadium',
+        price: 75,
+        available_seats: 450,
+        total_seats: 500
+      },
+      {
+        event_id: 'event456',
+        name: 'Tech Conference 2026',
+        date: '2026-08-20',
+        venue: 'Convention Center',
+        price: 299,
+        available_seats: 120,
+        total_seats: 200
+      },
+      {
+        event_id: 'event789',
+        name: 'Comedy Night Special',
+        date: '2026-09-10',
+        venue: 'Downtown Theater',
+        price: 45,
+        available_seats: 85,
+        total_seats: 100
+      }
+    ]
+  }
 })
 </script>
 

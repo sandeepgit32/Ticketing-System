@@ -12,43 +12,30 @@
       <div v-if="step === 'select'" class="step-content">
         <BaseCard title="Select Your Seats">
           <div class="seat-selection">
-            <div class="selection-controls">
-              <div class="control-group">
-                <label>Number of Seats:</label>
-                <select v-model.number="numSeats" class="select-input">
-                  <option v-for="n in 10" :key="n" :value="n">{{ n }}</option>
-                </select>
-              </div>
-
-              <div class="control-group">
-                <label>Preferred Row:</label>
-                <select v-model="preferredRow" class="select-input">
-                  <option value="">Any Row</option>
-                  <option v-for="row in availableRows" :key="row" :value="row">
-                    Row {{ row }}
-                  </option>
-                </select>
-              </div>
+            <div class="seat-meta">
+              <div><strong>Event:</strong> {{ eventName }}</div>
+              <div v-if="bookingStore.currentEvent">Venue: {{ bookingStore.currentEvent.venue }}</div>
+              <div v-if="bookingStore.currentEvent">Starts at: {{ bookingStore.currentEvent.start_time }}</div>
             </div>
 
             <div class="seat-map">
               <div class="stage">🎭 STAGE</div>
               <div class="rows">
                 <div
-                  v-for="row in availableRows"
-                  :key="row"
+                  v-for="row in bookingStore.currentEvent?.seat_arrangements || []"
+                  :key="row.join('-')"
                   class="seat-row"
-                  :class="{ 'selected-row': preferredRow === row }"
                 >
-                  <span class="row-label">{{ row }}</span>
+                  <span class="row-label">{{ row[0].replace(/\d+$/, '') }}</span>
                   <div class="seats">
                     <div
-                      v-for="seat in seatsPerRow"
-                      :key="seat"
+                      v-for="seatId in row"
+                      :key="seatId"
                       class="seat"
-                      :class="getSeatClass(row, seat)"
+                      :class="getSeatStatus(seatId)"
+                      @click="toggleSeat(seatId)"
                     >
-                      {{ seat }}
+                      {{ seatId }}
                     </div>
                   </div>
                 </div>
@@ -72,14 +59,14 @@
             <div class="booking-summary">
               <h3>Booking Summary</h3>
               <div class="summary-row">
-                <span>Number of Seats:</span>
-                <strong>{{ numSeats }}</strong>
+                <span>Selected Seats:</span>
+                <strong>{{ selectedSeats.length }}</strong>
               </div>
               <div class="summary-row">
-                <span>Price per Seat:</span>
-                <strong>${{ pricePerSeat }}</strong>
+                <span>Seats:</span>
+                <strong>{{ selectedSeats.join(', ') || 'None' }}</strong>
               </div>
-              <div class="summary-row total">
+              <div class="summary-row">
                 <span>Total:</span>
                 <strong>${{ totalPrice }}</strong>
               </div>
@@ -93,7 +80,7 @@
               :loading="bookingStore.loading"
               @click="handleReserve"
             >
-              Reserve Seats
+              Reserve Selected Seats
             </BaseButton>
           </template>
         </BaseCard>
@@ -210,8 +197,7 @@ const router = useRouter()
 const bookingStore = useBookingStore()
 
 const step = ref('select') // 'select', 'payment', 'confirmed'
-const numSeats = ref(2)
-const preferredRow = ref('')
+const selectedSeats = ref([])
 const paymentMethod = ref('card')
 const processingPayment = ref(false)
 const paymentError = ref('')
@@ -221,45 +207,47 @@ const bookingId = ref('')
 const reservedSeats = ref('')
 
 const eventId = computed(() => route.params.id)
-const eventName = ref('Summer Music Festival 2026')
-const pricePerSeat = ref(75)
-const totalPrice = computed(() => numSeats.value * pricePerSeat.value)
+const eventName = ref('')
 
-const availableRows = ref(['A', 'B', 'C', 'D', 'E', 'F'])
-const seatsPerRow = ref(10)
-const occupiedSeats = ref([
-  { row: 'A', seat: 3 },
-  { row: 'A', seat: 7 },
-  { row: 'B', seat: 5 },
-  { row: 'C', seat: 2 },
-  { row: 'C', seat: 8 }
-])
+const totalPrice = computed(() => {
+  if (!bookingStore.currentEvent || !bookingStore.currentEvent.seat_price_map) return 0
+  return selectedSeats.value.reduce((sum, seatId) => {
+    const price = Number(bookingStore.currentEvent.seat_price_map[seatId] || 0)
+    return sum + price
+  }, 0)
+})
 
-const getSeatClass = (row, seat) => {
-  const isOccupied = occupiedSeats.value.some(
-    s => s.row === row && s.seat === seat
-  )
-  const isSelected = preferredRow.value === row
+const getSeatStatus = (seatId) => {
+  if (!bookingStore.currentEvent) return 'occupied'
 
-  return {
-    occupied: isOccupied,
-    selected: isSelected && !isOccupied,
-    available: !isOccupied && !isSelected
+  const occupied = bookingStore.currentEvent.seat_availability_map?.[seatId] === 1
+  if (occupied) return 'occupied'
+  if (selectedSeats.value.includes(seatId)) return 'selected'
+  return 'available'
+}
+
+const toggleSeat = (seatId) => {
+  if (getSeatStatus(seatId) === 'occupied') return
+
+  const index = selectedSeats.value.indexOf(seatId)
+  if (index === -1) {
+    selectedSeats.value.push(seatId)
+  } else {
+    selectedSeats.value.splice(index, 1)
   }
 }
 
 const handleReserve = async () => {
-  try {
-    const preferredRows = preferredRow.value ? [preferredRow.value] : []
-    const result = await bookingStore.reserveSeats(
-      eventId.value,
-      numSeats.value,
-      preferredRows
-    )
+  if (!selectedSeats.value.length) {
+    alert('Please select at least one seat to reserve.')
+    return
+  }
 
+  try {
+    const result = await bookingStore.reserveSeats(eventId.value, selectedSeats.value)
     reservationId.value = result.reservation_id
-    reservedSeats.value = result.seats?.map(s => `${s.row}${s.seat}`).join(', ') || 
-      `${numSeats.value} seats`
+    reservedSeats.value = result.seats?.join(', ') || selectedSeats.value.join(', ')
+    eventName.value = bookingStore.currentEvent?.name || eventName.value
     step.value = 'payment'
   } catch (error) {
     alert(bookingStore.error || 'Failed to reserve seats')
@@ -267,16 +255,18 @@ const handleReserve = async () => {
 }
 
 const handlePayment = async () => {
+  if (!reservationId.value) {
+    paymentError.value = 'No active reservation to pay for.'
+    return
+  }
+
   processingPayment.value = true
   paymentError.value = ''
 
   try {
-    const result = await bookingStore.capturePayment(
-      reservationId.value,
-      paymentMethod.value
-    )
+    const result = await bookingStore.capturePayment(reservationId.value, totalPrice.value, 'USD')
 
-    bookingId.value = result.booking_id || reservationId.value
+    bookingId.value = result.intent_id || reservationId.value
     step.value = 'confirmed'
   } catch (error) {
     paymentError.value = bookingStore.error || 'Payment failed. Please try again.'
@@ -289,17 +279,20 @@ const cancelReservation = () => {
   bookingStore.clearReservation()
   step.value = 'select'
   reservationId.value = ''
+  selectedSeats.value = []
+  paymentError.value = ''
 }
 
 onMounted(async () => {
-  // In production, load event details from API
   try {
-    // await bookingStore.loadEvent(eventId.value)
-    // Update event details from loaded data
+    const eventData = await bookingStore.loadEvent(eventId.value)
+    eventName.value = eventData?.name || ''
   } catch (error) {
     console.error('Failed to load event:', error)
   }
 })
+
+
 </script>
 
 <style scoped>

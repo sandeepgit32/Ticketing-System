@@ -22,12 +22,12 @@
     <div v-else class="bookings-list">
       <BaseCard
         v-for="booking in bookingStore.bookings"
-        :key="booking.id"
+        :key="booking.booking_id"
         class="booking-card"
       >
         <div class="booking-content">
           <div class="booking-header-section">
-            <h3 class="booking-event-name">{{ booking.event_name || 'Event' }}</h3>
+            <h3 class="booking-event-name">{{ booking.event_id || 'Event' }}</h3>
             <span class="booking-status" :class="`status-${booking.status}`">
               {{ formatStatus(booking.status) }}
             </span>
@@ -36,7 +36,7 @@
           <div class="booking-details">
             <div class="detail-item">
               <span class="detail-label">Booking ID:</span>
-              <span class="detail-value">{{ booking.id }}</span>
+              <span class="detail-value">{{ booking.booking_id }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">Seats:</span>
@@ -108,10 +108,21 @@ const formatStatus = (status) => {
 }
 
 const formatSeats = (seats) => {
-  if (Array.isArray(seats)) {
-    return seats.map(s => `${s.row}${s.seat}`).join(', ')
+  if (!Array.isArray(seats)) {
+    return seats || 'N/A'
   }
-  return seats || 'N/A'
+
+  if (seats.length === 0) return 'None'
+
+  if (typeof seats[0] === 'string') {
+    return seats.join(', ')
+  }
+
+  return seats.map(s => {
+    if (typeof s === 'string') return s
+    if (s?.row && s?.seat) return `${s.row}${s.seat}`
+    return JSON.stringify(s)
+  }).join(', ')
 }
 
 const formatDate = (dateString) => {
@@ -144,7 +155,11 @@ const loadMore = async () => {
 const loadBookings = async () => {
   try {
     const result = await bookingStore.loadUserBookings(limit.value, offset.value)
-    hasMore.value = result.has_more || false
+    if (result && typeof result.total === 'number') {
+      hasMore.value = result.total > offset.value + limit.value
+    } else {
+      hasMore.value = false
+    }
   } catch (error) {
     console.error('Failed to load bookings:', error)
   }

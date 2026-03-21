@@ -45,15 +45,17 @@ def get_db_connection():
     Get a MySQL connection from the shared pool.
 
     The pool is initialized during the first request by `startup_event`. If
-    the pool has not yet been created this will raise an exception.
+    the pool has not yet been created this will initialize it lazily.
 
     Returns:
         mysql.connector.connection.MySQLConnection: usable connection object.
     """
+    global db_pool
+    if db_pool is None:
+        startup_event()
     return db_pool.get_connection()
 
 
-@app.before_first_request
 def startup_event():
     """
     Create a connection pool when the app handles its first HTTP request.
@@ -85,6 +87,17 @@ def startup_event():
                 time.sleep(2)
             else:
                 raise
+
+
+# Flask 2.3 removed `before_first_request`; `before_serving` may not exist
+# in some versions. Register the startup hook when available.
+if hasattr(app, "before_first_request"):
+    app.before_first_request(startup_event)
+elif hasattr(app, "before_serving"):
+    app.before_serving(startup_event)
+else:
+    # No lifecycle hook available; fallback to lazy initialization in get_db_connection.
+    pass
 
 
 def get_current_user_email() -> str:
