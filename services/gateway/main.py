@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 from fastapi import FastAPI, HTTPException, Request, Depends, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -81,15 +81,27 @@ async def proxy_request(
                 params=request.query_params,
             )
 
-            # Return response
-            return JSONResponse(
-                content=response.json()
-                if response.headers.get("content-type", "").startswith(
-                    "application/json"
-                )
-                else response.text,
+            # Normalize response content and forward headers safely
+            outgoing_headers = {
+                k: v
+                for k, v in response.headers.items()
+                if k.lower()
+                not in [
+                    "content-length",
+                    "transfer-encoding",
+                    "content-encoding",
+                    "connection",
+                ]
+            }
+
+            content = response.content
+            media_type = response.headers.get("content-type")
+
+            return Response(
+                content=content,
                 status_code=response.status_code,
-                headers=dict(response.headers),
+                headers=outgoing_headers,
+                media_type=media_type,
             )
     except httpx.RequestError as e:
         raise HTTPException(

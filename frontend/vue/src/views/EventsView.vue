@@ -5,7 +5,10 @@
       <p class="events-subtitle">Select an event to book your seats</p>
     </div>
 
-    <div class="events-grid">
+    <div v-if="isLoading" class="loading-state">Loading events...</div>
+    <div v-if="errorMessage" class="error-state">{{ errorMessage }}</div>
+
+    <div class="events-grid" v-else>
       <BaseCard
         v-for="event in events"
         :key="event.event_id"
@@ -40,7 +43,7 @@
       </BaseCard>
     </div>
 
-    <div v-if="events.length === 0" class="empty-state">
+    <div v-if="!isLoading && events.length === 0" class="empty-state">
       <div class="empty-icon">🎫</div>
       <h3>No Events Available</h3>
       <p>Check back later for upcoming events</p>
@@ -57,35 +60,9 @@ import BaseButton from '../components/BaseButton.vue'
 
 const router = useRouter()
 
-const events = ref([
-  {
-    event_id: 'event123',
-    name: 'Summer Music Festival 2026',
-    date: '2026-07-15T19:00:00',
-    venue: 'Central Stadium',
-    price: 75,
-    available_seats: 450,
-    total_seats: 500
-  },
-  {
-    event_id: 'event456',
-    name: 'Tech Conference 2026',
-    date: '2026-08-20T09:00:00',
-    venue: 'Convention Center',
-    price: 299,
-    available_seats: 120,
-    total_seats: 200
-  },
-  {
-    event_id: 'event789',
-    name: 'Comedy Night Special',
-    date: '2026-09-10T20:00:00',
-    venue: 'Downtown Theater',
-    price: 45,
-    available_seats: 85,
-    total_seats: 100
-  }
-])
+const events = ref([])
+const errorMessage = ref('')
+const isLoading = ref(false)
 
 const formatDate = (dateString) => {
   const date = new Date(dateString)
@@ -104,40 +81,17 @@ const selectEvent = (event) => {
 }
 
 onMounted(async () => {
+  isLoading.value = true
   try {
     const response = await bookingAPI.listEvents()
     events.value = response.data?.events || []
+    errorMessage.value = ''
   } catch (error) {
-    console.error('Failed to load events from API, falling back to local data.', error)
-    events.value = [
-      {
-        event_id: 'event123',
-        name: 'Summer Music Festival 2026',
-        date: '2026-07-15',
-        venue: 'Central Stadium',
-        price: 75,
-        available_seats: 450,
-        total_seats: 500
-      },
-      {
-        event_id: 'event456',
-        name: 'Tech Conference 2026',
-        date: '2026-08-20',
-        venue: 'Convention Center',
-        price: 299,
-        available_seats: 120,
-        total_seats: 200
-      },
-      {
-        event_id: 'event789',
-        name: 'Comedy Night Special',
-        date: '2026-09-10',
-        venue: 'Downtown Theater',
-        price: 45,
-        available_seats: 85,
-        total_seats: 100
-      }
-    ]
+    console.error('Failed to load events from API.', error)
+    errorMessage.value = 'Unable to load events. Please try again later.'
+    events.value = []
+  } finally {
+    isLoading.value = false
   }
 })
 </script>
