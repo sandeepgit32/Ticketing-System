@@ -6,6 +6,8 @@ from pydantic import BaseModel
 class BookingDetails(BaseModel):
     booking_id: str
     event_id: str
+    event_name: str
+    event_start_time: Optional[str] = None
     user_email: str
     status: str  # reserved, confirmed, expired, cancelled
     seats: List[str]

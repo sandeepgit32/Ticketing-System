@@ -27,7 +27,10 @@
       >
         <div class="booking-content">
           <div class="booking-header-section">
-            <h3 class="booking-event-name">{{ booking.event_id || 'Event' }}</h3>
+            <div class="booking-title-group">
+              <h3 class="booking-event-name">{{ booking.event_name || booking.event_id || 'Event' }}</h3>
+              <p class="booking-event-time">{{ formatDate(booking.event_start_time) }}</p>
+            </div>
             <span class="booking-status" :class="`status-${booking.status}`">
               {{ formatStatus(booking.status) }}
             </span>
@@ -41,6 +44,10 @@
             <div class="detail-item">
               <span class="detail-label">Seats:</span>
               <span class="detail-value">{{ formatSeats(booking.seats) }}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Event Date & Time:</span>
+              <span class="detail-value">{{ formatDate(booking.event_start_time) }}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">Booking Date:</span>
@@ -139,12 +146,12 @@ const formatDate = (dateString) => {
 
 const viewDetails = (booking) => {
   // Navigate to booking details page or show modal
-  alert(`Booking Details:\n\nID: ${booking.id}\nStatus: ${booking.status}`)
+  alert(`Booking Details:\n\nID: ${booking.booking_id}\nEvent: ${booking.event_name || booking.event_id}\nStatus: ${booking.status}`)
 }
 
 const downloadTicket = (booking) => {
   // In production, this would download a PDF ticket
-  alert(`Downloading ticket for booking: ${booking.id}`)
+  alert(`Downloading ticket for booking: ${booking.booking_id}`)
 }
 
 const loadMore = async () => {
@@ -267,12 +274,24 @@ onMounted(async () => {
   gap: 1rem;
 }
 
+.booking-title-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  flex: 1;
+}
+
 .booking-event-name {
   font-size: 1.25rem;
   font-weight: 600;
   color: #111827;
   margin: 0;
-  flex: 1;
+}
+
+.booking-event-time {
+  font-size: 0.95rem;
+  color: #6b7280;
+  margin: 0;
 }
 
 .booking-status {

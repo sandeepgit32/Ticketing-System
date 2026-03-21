@@ -363,16 +363,12 @@ Authorization: Bearer <token>
 ```json
 {
   "booking_id": "uuid",
-  "reservation_id": "uuid",
   "event_id": "event123",
-  "user_id": "uuid",
+  "event_name": "Rock Concert 2026",
+  "event_start_time": "2026-06-15T19:00:00",
+  "user_email": "user@example.com",
   "status": "confirmed",
-  "seats": [
-    {
-      "row": "A",
-      "seat": 1
-    }
-  ],
+  "seats": ["A1", "A2"],
   "payment_status": "completed",
   "total_amount": 100.00,
   "created_at": "2026-02-07T12:00:00Z",
@@ -408,11 +404,12 @@ Authorization: Bearer <token>
   "bookings": [
     {
       "booking_id": "uuid",
-      "reservation_id": "uuid",
       "event_id": "event123",
-      "user_id": "uuid",
+      "event_name": "Rock Concert 2026",
+      "event_start_time": "2026-06-15T19:00:00",
+      "user_email": "user@example.com",
       "status": "confirmed",
-      "seats": [{"row": "A", "seat": 1}],
+      "seats": ["A1"],
       "payment_status": "completed",
       "total_amount": 100.00,
       "created_at": "2026-02-07T12:00:00Z",

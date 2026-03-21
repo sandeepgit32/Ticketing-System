@@ -135,9 +135,12 @@ def get_booking_details(booking_id: str):
 
     try:
         cursor.execute(
-            """SELECT booking_id, event_id, user_email, status, 
-                      seats, payment_status, total_amount, created_at, updated_at, expires_at 
-               FROM bookings WHERE booking_id = %s""",
+            """SELECT b.booking_id, b.event_id, e.name AS event_name, e.start_time AS event_start_time,
+                      b.user_email, b.status, b.seats, b.payment_status, b.total_amount,
+                      b.created_at, b.updated_at, b.expires_at
+               FROM bookings b
+               LEFT JOIN events e ON e.event_id = b.event_id
+               WHERE b.booking_id = %s""",
             (booking_id,),
         )
         booking = cursor.fetchone()
@@ -154,6 +157,10 @@ def get_booking_details(booking_id: str):
         model = BookingDetails(
             booking_id=booking["booking_id"],
             event_id=booking["event_id"],
+            event_name=booking.get("event_name") or "",
+            event_start_time=booking["event_start_time"].isoformat()
+            if booking.get("event_start_time")
+            else None,
             user_email=booking["user_email"],
             status=booking["status"],
             seats=json.loads(booking["seats"])
@@ -203,12 +210,14 @@ def get_user_bookings():
 
         # Get bookings with pagination
         cursor.execute(
-            """SELECT booking_id, event_id, user_email, status, 
-                      seats, payment_status, total_amount, created_at, updated_at, expires_at 
-               FROM bookings 
-               WHERE user_email = %s 
-               ORDER BY created_at DESC 
-               LIMIT %s OFFSET %s""",
+            """SELECT b.booking_id, b.event_id, e.name AS event_name, e.start_time AS event_start_time,
+                 b.user_email, b.status, b.seats, b.payment_status, b.total_amount,
+                 b.created_at, b.updated_at, b.expires_at
+             FROM bookings b
+             LEFT JOIN events e ON e.event_id = b.event_id
+             WHERE b.user_email = %s
+             ORDER BY b.created_at DESC
+             LIMIT %s OFFSET %s""",
             (user_email, limit, offset),
         )
         bookings = cursor.fetchall()
@@ -221,6 +230,10 @@ def get_user_bookings():
                 BookingDetails(
                     booking_id=booking["booking_id"],
                     event_id=booking["event_id"],
+                    event_name=booking.get("event_name") or "",
+                    event_start_time=booking["event_start_time"].isoformat()
+                    if booking.get("event_start_time")
+                    else None,
                     user_email=booking["user_email"],
                     status=booking["status"],
                     seats=json.loads(booking["seats"])

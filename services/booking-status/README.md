@@ -42,10 +42,11 @@ In Docker the service starts automatically via `CMD ["python", "main.py"]`.
 
 ## API Endpoints
 
-- `GET /bookings/<booking_id>` – returns booking details; requires a
-  `Authorization: Bearer <token>` header.
+- `GET /bookings/<booking_id>` – returns booking details, including the
+  linked event name and start time; requires a `Authorization: Bearer <token>`
+  header.
 - `GET /user/bookings?limit=50&offset=0` – paginated list of the current
-  user’s bookings.
+  user’s bookings with event metadata.
 - `GET /health` – simple health response `{"status":"healthy"}`.
 
 ### Token verification
@@ -58,6 +59,9 @@ with the appropriate HTTP error.
 
 Pydantic models live in `schemas.py` but they are only used internally for
 response formatting; Flask returns the `model_dump()` of each model.
+
+Booking responses include `event_id` for traceability plus `event_name` and
+`event_start_time` for display.
 
 ## Notes
 

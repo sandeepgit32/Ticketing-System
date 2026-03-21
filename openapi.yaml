@@ -1145,7 +1145,7 @@ components:
 
     BookingDetails:
       type: object
-      required: [booking_id, event_id, user_email, status, seats, payment_status, created_at, updated_at]
+      required: [booking_id, event_id, event_name, user_email, status, seats, payment_status, created_at, updated_at]
       properties:
         booking_id:
           type: string
@@ -1154,6 +1154,16 @@ components:
         event_id:
           type: string
           example: "evt-abc123"
+        event_name:
+          type: string
+          description: Human-readable event name resolved from the events table.
+          example: "Rock Concert 2026"
+        event_start_time:
+          type: string
+          format: date-time
+          nullable: true
+          description: Start time of the linked event.
+          example: "2026-06-15T19:00:00"
         user_email:
           type: string
           format: email
@@ -1165,7 +1175,8 @@ components:
         seats:
           type: array
           items:
-            $ref: "#/components/schemas/SeatInfo"
+            type: string
+          example: ["A1", "A2"]
         payment_status:
           type: string
           description: Status from the payment provider.
