@@ -30,6 +30,7 @@
               <span class="detail-icon">💰</span>
               <span>${{ event.price || 'N/A' }}</span>
             </div>
+          </div>
         </div>
         <template #footer>
           <BaseButton variant="primary" block @click.stop="selectEvent(event)">
