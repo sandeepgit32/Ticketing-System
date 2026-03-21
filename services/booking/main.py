@@ -1188,11 +1188,14 @@ async def payments_capture(
 ):
     """Capture a payment by forwarding the request to the configured payment provider.
 
-    This is a minimal implementation used for local development and testing.  The
+    This implementation first creates a payment intent and then confirms it so
+    the mock payment provider emits its webhook to the booking service.  The
     endpoint reads ``PAYMENT_PROVIDER_URL`` from the environment, proxies the
-    request body to ``POST {PAYMENT_PROVIDER_URL}/payments/intents``, and returns
-    the provider's JSON response verbatim.  Any HTTP error from the provider is
-    re-raised as an ``HTTPException`` with the same status code.
+    request body to ``POST {PAYMENT_PROVIDER_URL}/payments/intents``, then
+    calls ``GET {PAYMENT_PROVIDER_URL}/payments/intents/{intent_id}/confirm``.
+    The intent response is returned to the caller. Any HTTP error from either
+    upstream request is re-raised as an ``HTTPException`` with the same status
+    code.
 
     Args:
         body: Arbitrary JSON payload forwarded to the payment provider.  At
@@ -1227,21 +1230,43 @@ async def payments_capture(
             * ``409`` - duplicate intent (idempotency collision).
             * ``503`` - payment provider temporarily unavailable.
     """
-    # Minimal implementation: forward to mock provider
+    # Create the intent first, then confirm it so the payment provider
+    # dispatches the webhook back to this service.
     payment_provider = required_env("PAYMENT_PROVIDER_URL")
     async with httpx.AsyncClient() as client:
         headers = {}
         if idempotency_key:
             headers["Idempotency-Key"] = idempotency_key
-        r = await client.post(
+        intent_response = await client.post(
             f"{payment_provider}/payments/intents",
             json=body.model_dump(),
             headers=headers,
             timeout=10,
         )
-    if r.status_code >= 400:
-        raise HTTPException(status_code=r.status_code, detail=r.text)
-    return r.json()
+        if intent_response.status_code >= 400:
+            raise HTTPException(
+                status_code=intent_response.status_code,
+                detail=intent_response.text,
+            )
+
+        intent = intent_response.json()
+        intent_id = intent.get("intent_id")
+        if not intent_id:
+            raise HTTPException(
+                status_code=502, detail="payment provider returned no intent_id"
+            )
+
+        confirm_response = await client.get(
+            f"{payment_provider}/payments/intents/{intent_id}/confirm",
+            timeout=15,
+        )
+
+    if confirm_response.status_code >= 400:
+        raise HTTPException(
+            status_code=confirm_response.status_code, detail=confirm_response.text
+        )
+
+    return intent
 
 
 @app.post("/payments/webhook")

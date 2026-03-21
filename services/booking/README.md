@@ -310,7 +310,7 @@ Behavior:
 - `500 Internal Server Error` for transaction failures.
 
 ### `POST /payments/capture`
-Proxy payment intent/capture request to the configured payment provider.
+Create a payment intent and confirm it with the configured payment provider.
 
 **Headers**:
 - `Idempotency-Key: <unique-key>` (optional)
@@ -320,6 +320,10 @@ Proxy payment intent/capture request to the configured payment provider.
 
 **Response**:
 - Returns the payment provider JSON response.
+
+**Behaviour**:
+- First calls `${PAYMENT_PROVIDER_URL}/payments/intents`.
+- Then calls `${PAYMENT_PROVIDER_URL}/payments/intents/{intent_id}/confirm` so the mock provider can emit the webhook.
 
 **Errors**:
 - Mirrors upstream status codes for payment provider failures.

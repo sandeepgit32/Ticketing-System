@@ -57,7 +57,7 @@ with the appropriate HTTP error.
 ## Schema
 
 Pydantic models live in `schemas.py` but they are only used internally for
-response formatting; Flask returns the `.dict()` of each model.
+response formatting; Flask returns the `model_dump()` of each model.
 
 ## Notes
 

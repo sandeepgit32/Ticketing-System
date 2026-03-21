@@ -8,7 +8,7 @@ class BookingDetails(BaseModel):
     event_id: str
     user_email: str
     status: str  # reserved, confirmed, expired, cancelled
-    seats: List[dict]
+    seats: List[str]
     payment_status: str
     total_amount: Optional[float] = None
     created_at: str

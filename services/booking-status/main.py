@@ -169,7 +169,7 @@ def get_booking_details(booking_id: str):
             if booking["expires_at"]
             else None,
         )
-        return jsonify(model.dict())
+        return jsonify(model.model_dump())
     finally:
         cursor.close()
         conn.close()
@@ -239,7 +239,7 @@ def get_user_bookings():
             )
 
         response_model = UserBookingsResponse(bookings=booking_list, total=total)
-        return jsonify(response_model.dict())
+        return jsonify(response_model.model_dump())
     finally:
         cursor.close()
         conn.close()
