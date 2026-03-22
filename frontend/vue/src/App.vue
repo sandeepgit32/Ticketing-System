@@ -5,7 +5,6 @@
         <div class="nav-brand">
           <router-link to="/events" class="brand-link">
             <img class="brand-logo" src="/logo.png" alt="BookEventTicket logo" />
-            <span class="brand-name">BookEventTicket</span>
           </router-link>
         </div>
 
@@ -106,8 +105,8 @@ body {
 }
 
 .brand-logo {
-  width: 2.75rem;
-  height: 2.75rem;
+  width: 15rem;
+  height: 5.5rem;
   object-fit: contain;
   flex: 0 0 auto;
 }

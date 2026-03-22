@@ -729,8 +729,8 @@ onMounted(async () => {
 }
 
 .ticket-logo {
-  width: 4.75rem;
-  height: 4.75rem;
+  width: 15rem;
+  height: 6rem;
   object-fit: contain;
   flex: 0 0 auto;
 }

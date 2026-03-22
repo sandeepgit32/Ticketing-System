@@ -3,7 +3,6 @@
     <BaseCard class="auth-card">
       <div class="auth-brand">
         <img class="auth-logo" src="/logo.png" alt="BookEventTicket logo" />
-        <p class="auth-brand-name">BookEventTicket</p>
       </div>
 
       <div class="auth-header">
@@ -164,13 +163,13 @@ const handleSubmit = async () => {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 1.5rem;
+  gap: 0.25rem;
+  margin: 0 0 1rem;
 }
 
 .auth-logo {
-  width: 6.25rem;
-  height: 6.25rem;
+  width: 20rem;
+  height: 8rem;
   object-fit: contain;
 }
 
