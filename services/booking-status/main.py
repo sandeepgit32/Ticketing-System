@@ -114,6 +114,31 @@ def get_current_user_email() -> str:
     return request.headers.get("X-User-Email", "")
 
 
+def get_current_user_role() -> str:
+    """
+    Read the authenticated user's role from the gateway-forwarded header.
+
+    The API gateway adds `X-User-Role` after validating the JWT. User-facing
+    booking endpoints reject admin users so only the owning customer can view
+    or manage their bookings.
+
+    Returns:
+        str: The caller's role, or an empty string if the header is missing.
+    """
+    return request.headers.get("X-User-Role", "")
+
+
+def require_customer_access() -> None:
+    """
+    Reject admin users from the customer booking endpoints.
+
+    The gateway still performs authentication; this service only enforces the
+    customer-only rule for booking status pages and APIs.
+    """
+    if get_current_user_role() == "Admin":
+        abort(403, description="Admin access not allowed")
+
+
 @app.route("/bookings/<booking_id>", methods=["GET"])
 def get_booking_details(booking_id: str):
     """
@@ -130,6 +155,7 @@ def get_booking_details(booking_id: str):
     does not match the booking's `user_email`, a 403 is raised.
     """
     current_user_email = get_current_user_email()
+    require_customer_access()
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
 
@@ -195,6 +221,7 @@ def get_user_bookings():
     Results include a `total` count and a `bookings` list.
     """
     user_email = get_current_user_email()
+    require_customer_access()
     limit = int(request.args.get("limit", 50))
     offset = int(request.args.get("offset", 0))
     conn = get_db_connection()

@@ -65,6 +65,7 @@ async def proxy_request(
         # Strip any client-supplied X-User-Email to prevent spoofing;
         # the header is only set below from the gateway-verified token.
         headers.pop("x-user-email", None)
+        headers.pop("x-user-role", None)
 
         # Add user info if authenticated
         if user_info:

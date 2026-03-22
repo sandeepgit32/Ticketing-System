@@ -50,7 +50,6 @@
     </transition>
 
     <div class="booking-content">
-      <!-- Seat Selection Step -->
       <div v-if="step === 'select'" class="step-content">
         <BaseCard title="Select Your Seats">
           <div class="seat-selection">
@@ -62,7 +61,7 @@
               </p>
             </div>
 
-            <div class="seat-map">
+            <div class="seat-map" :class="{ 'seat-map-disabled': authStore.isAdmin }">
               <div class="stage">🎭 STAGE</div>
               <div class="rows">
                 <div
@@ -100,7 +99,7 @@
               </div>
             </div>
 
-            <div class="booking-summary">
+            <div v-if="!authStore.isAdmin" class="booking-summary">
               <h3>Booking Summary</h3>
               <div class="summary-row">
                 <span>Selected Seats:</span>
@@ -119,6 +118,7 @@
 
           <template #footer>
             <BaseButton
+              v-if="!authStore.isAdmin"
               variant="primary"
               block
               :loading="bookingStore.loading"
@@ -130,7 +130,6 @@
         </BaseCard>
       </div>
 
-      <!-- Payment Step -->
       <div v-if="step === 'payment'" class="step-content">
         <BaseCard title="Complete Payment">
           <div class="payment-info">
@@ -185,7 +184,6 @@
         </BaseCard>
       </div>
 
-      <!-- Confirmation Step -->
       <div v-if="step === 'confirmed'" class="step-content">
         <BaseCard>
           <div class="confirmation">
@@ -259,6 +257,7 @@ const reservedSeats = ref('')
 const eventId = computed(() => route.params.id)
 const eventName = ref('')
 const canCloseEvent = computed(() => authStore.isAdmin && Number(bookingStore.currentEvent?.closed || 0) !== 1)
+const canBookSeats = computed(() => !authStore.isAdmin)
 const isBeforeStartTime = computed(() => {
   const startTime = bookingStore.currentEvent?.start_time
   if (!startTime) return false
@@ -299,6 +298,7 @@ const getSeatStatus = (seatId) => {
 }
 
 const toggleSeat = (seatId) => {
+  if (!canBookSeats.value) return
   if (getSeatStatus(seatId) === 'occupied') return
 
   const index = selectedSeats.value.indexOf(seatId)
@@ -310,6 +310,11 @@ const toggleSeat = (seatId) => {
 }
 
 const handleReserve = async () => {
+  if (!canBookSeats.value) {
+    alert('Seat booking is not available for admin users.')
+    return
+  }
+
   if (!selectedSeats.value.length) {
     alert('Please select at least one seat to reserve.')
     return
@@ -546,6 +551,14 @@ onMounted(async () => {
   border-radius: 0.5rem;
 }
 
+.seat-map-disabled {
+  opacity: 0.92;
+}
+
+.seat-map-disabled .seat {
+  cursor: default;
+}
+
 .stage {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   color: white;
@@ -644,6 +657,19 @@ onMounted(async () => {
   padding: 1.5rem;
   border-radius: 0.5rem;
   border: 2px solid #667eea;
+}
+
+.restricted-state {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1e3a8a;
+  border-radius: 0.75rem;
+  padding: 1rem 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.restricted-state p + p {
+  margin-top: 0.5rem;
 }
 
 .booking-summary h3 {

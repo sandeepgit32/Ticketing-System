@@ -11,7 +11,7 @@
 
         <div class="nav-menu">
           <router-link to="/events" class="nav-link">Events</router-link>
-          <router-link to="/bookings" class="nav-link">My Bookings</router-link>
+          <router-link v-if="!authStore.isAdmin" to="/bookings" class="nav-link">My Bookings</router-link>
         </div>
 
         <div class="nav-user">

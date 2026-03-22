@@ -3,13 +3,12 @@ import os
 import sys
 
 import pytest
+from dotenv import load_dotenv
 from fastapi import HTTPException
 
 _SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Load environment from .env before the module import so required_env() succeeds.
-from dotenv import load_dotenv
-
 load_dotenv(dotenv_path=os.path.join(_SERVICE_DIR, ".env"), override=False)
 
 if _SERVICE_DIR not in sys.path:

@@ -23,6 +23,8 @@ _spec.loader.exec_module(_mod)
 
 app = _mod.app
 get_current_user_email = _mod.get_current_user_email
+get_current_user_role = _mod.get_current_user_role
+require_customer_access = _mod.require_customer_access
 
 
 def test_health_route(monkeypatch):
@@ -50,3 +52,34 @@ def test_get_current_user_email_missing_header():
 def test_get_current_user_email_found_header():
     with app.test_request_context("/", headers={"X-User-Email": "user@example.com"}):
         assert get_current_user_email() == "user@example.com"
+
+
+def test_get_current_user_role_found_header():
+    with app.test_request_context("/", headers={"X-User-Role": "User"}):
+        assert get_current_user_role() == "User"
+
+
+def test_require_customer_access_blocks_admin():
+    import pytest
+
+    with app.test_request_context("/", headers={"X-User-Role": "Admin"}):
+        with pytest.raises(Exception) as exc:
+            require_customer_access()
+        assert getattr(exc.value, "code", None) == 403
+
+
+def test_user_bookings_route_rejects_admin(monkeypatch):
+    from unittest.mock import MagicMock
+
+    monkeypatch.setattr(
+        _mod.pooling, "MySQLConnectionPool", lambda **kwargs: MagicMock()
+    )
+
+    client = app.test_client()
+    response = client.get(
+        "/user/bookings",
+        headers={"X-User-Email": "admin@example.com", "X-User-Role": "Admin"},
+    )
+
+    assert response.status_code == 403
+    assert b"Admin access not allowed" in response.data

@@ -224,6 +224,16 @@ def _require_admin_role(
         raise HTTPException(status_code=403, detail="Admin role required")
 
 
+def _require_customer_role(
+    x_user_email: Optional[str], x_user_role: Optional[str]
+) -> None:
+    """Ensure the caller is authenticated and is not an admin user."""
+    if not x_user_email:
+        raise HTTPException(status_code=401, detail="x_user_email is required")
+    if (x_user_role or "") == "Admin":
+        raise HTTPException(status_code=403, detail="Admin access not allowed")
+
+
 def _reservation_redis_keys(event_id: str, reservation_id: str) -> tuple[str, str, str]:
     """Return the three Redis key names used for a reservation.
 
@@ -1073,6 +1083,7 @@ async def reserve(
     req: ReserveRequest,
     idempotency_key: Optional[str] = Header(None),
     x_user_email: Optional[str] = Header(None),
+    x_user_role: Optional[str] = Header(None),
 ):
     """Reserve seats for an event.
 
@@ -1084,7 +1095,10 @@ async def reserve(
     - `idempotency_key`: Optional key used to deduplicate retries.
     - `x_user_email`: Caller identity used for reservation ownership and notifications.
       Auth is enforced in the API Gateway; this service trusts forwarded identity headers.
+    - `x_user_role`: Forwarded caller role; admins are rejected from customer booking flows.
     """
+    _require_customer_role(x_user_email, x_user_role)
+
     # Validate request payload shape before any external I/O.
     selected_seats = req.selected_seats or []
     if not selected_seats:
@@ -1198,7 +1212,10 @@ async def reserve(
 
 @app.post("/payments/capture")
 async def payments_capture(
-    body: PaymentCaptureRequest, idempotency_key: Optional[str] = Header(None)
+    body: PaymentCaptureRequest,
+    idempotency_key: Optional[str] = Header(None),
+    x_user_email: Optional[str] = Header(None),
+    x_user_role: Optional[str] = Header(None),
 ):
     """Capture a payment by forwarding the request to the configured payment provider.
 
@@ -1225,6 +1242,8 @@ async def payments_capture(
         idempotency_key: Optional ``Idempotency-Key`` header value forwarded
             unchanged to the payment provider so that retried requests are not
             double-charged.  When omitted, no idempotency header is sent.
+        x_user_email: Caller identity forwarded by the gateway.
+        x_user_role: Caller role forwarded by the gateway; admins are blocked.
 
     Returns:
         The JSON body returned by the payment provider on success, for example::
@@ -1244,6 +1263,8 @@ async def payments_capture(
             * ``409`` - duplicate intent (idempotency collision).
             * ``503`` - payment provider temporarily unavailable.
     """
+    _require_customer_role(x_user_email, x_user_role)
+
     # Create the intent first, then confirm it so the payment provider
     # dispatches the webhook back to this service.
     payment_provider = required_env("PAYMENT_PROVIDER_URL")

@@ -28,7 +28,7 @@ const routes = [
     path: '/bookings',
     name: 'bookings',
     component: () => import('../views/BookingsView.vue'),
-    meta: { requiresAuth: true }
+    meta: { requiresAuth: true, disallowAdmin: true }
   }
 ]
 
@@ -45,6 +45,9 @@ router.beforeEach((to, from, next) => {
   if (requiresAuth && !authStore.isAuthenticated) {
     // Redirect to login if not authenticated
     next('/login')
+  } else if (to.meta.disallowAdmin && authStore.isAdmin) {
+    // Admin users should not access customer booking pages.
+    next('/events')
   } else if (!requiresAuth && authStore.isAuthenticated && to.path === '/login') {
     // Redirect to events if already logged in and trying to access login
     next('/events')
