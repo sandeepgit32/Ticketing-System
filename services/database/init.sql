@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS reservations (
     user_email VARCHAR(255) NOT NULL,
     status VARCHAR(20) NOT NULL,
     seats JSON NOT NULL,
+    total_amount DECIMAL(10, 2) NULL,
     expires_at TIMESTAMP NULL,
     confirmed_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

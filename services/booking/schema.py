@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List
 
 from pydantic import BaseModel
 
@@ -17,4 +17,3 @@ class CreateEventRequest(BaseModel):
 class PaymentCaptureRequest(BaseModel):
     intent_id: str
     amount: float
-    currency: Optional[str] = "usd"

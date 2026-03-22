@@ -42,14 +42,13 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
-  const capturePayment = async (reservationId, amount, currency = 'USD') => {
+  const capturePayment = async (reservationId, amount) => {
     loading.value = true
     error.value = null
     try {
       const response = await bookingAPI.capturePayment({
         intent_id: reservationId,
-        amount,
-        currency
+        amount
       })
       return response.data
     } catch (err) {

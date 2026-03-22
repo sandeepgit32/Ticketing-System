@@ -341,7 +341,7 @@ const handlePayment = async () => {
   paymentError.value = ''
 
   try {
-    const result = await bookingStore.capturePayment(reservationId.value, totalPrice.value, 'USD')
+    const result = await bookingStore.capturePayment(reservationId.value, totalPrice.value)
 
     bookingId.value = result.intent_id || reservationId.value
     step.value = 'confirmed'

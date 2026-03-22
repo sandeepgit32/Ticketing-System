@@ -491,7 +491,6 @@ paths:
             example:
               intent_id: "a3f1c2d4-5678-90ab-cdef-1234567890ab"
               amount: 150.00
-              currency: "USD"
       responses:
         "200":
           description: Payment intent created at the provider
@@ -690,7 +689,6 @@ paths:
             example:
               intent_id: "a3f1c2d4-5678-90ab-cdef-1234567890ab"
               amount: 150.00
-              currency: "USD"
       responses:
         "200":
           description: Payment intent created (or retrieved from idempotency cache)
@@ -974,7 +972,7 @@ components:
             B1: 0
         seat_price_map:
           type: object
-          description: Maps each seat ID to its price in the system's default currency.
+          description: Maps each seat ID to its price in INR.
           additionalProperties:
             type: number
           example:
@@ -1003,7 +1001,7 @@ components:
 
     ReserveResponse:
       type: object
-      required: [reservation_id, event_id, seats, expires_at, status]
+      required: [reservation_id, event_id, seats, total_amount, expires_at, status]
       properties:
         reservation_id:
           type: string
@@ -1018,6 +1016,10 @@ components:
           items:
             type: string
           example: ["A1", "A2", "A3"]
+        total_amount:
+          type: number
+          description: Total reservation amount in INR.
+          example: 150.00
         expires_at:
           type: string
           format: date-time
@@ -1032,9 +1034,8 @@ components:
       type: object
       required: [intent_id]
       description: |
-        Forwarded verbatim to the payment provider. The `intent_id` should be set
-        to the `reservation_id` returned by `POST /booking/bookings/reserve`.
-        Include `amount` and `currency` so the provider can record the charge.
+        Forwarded to the payment provider. The `intent_id` should be set to the
+        `reservation_id` returned by `POST /booking/bookings/reserve`.
       properties:
         intent_id:
           type: string
@@ -1043,13 +1044,8 @@ components:
           example: "a3f1c2d4-5678-90ab-cdef-1234567890ab"
         amount:
           type: number
-          description: Amount to charge in the currency's major unit (e.g. dollars).
+          description: Amount to charge in INR.
           example: 150.00
-        currency:
-          type: string
-          description: ISO 4217 currency code.
-          default: USD
-          example: USD
 
     PaymentIntentResponse:
       type: object
@@ -1067,10 +1063,6 @@ components:
           type: number
           nullable: true
           example: 150.00
-        currency:
-          type: string
-          nullable: true
-          example: USD
 
     WebhookPayload:
       type: object
@@ -1224,13 +1216,8 @@ components:
           example: "a3f1c2d4-5678-90ab-cdef-1234567890ab"
         amount:
           type: number
-          description: Amount to charge in the currency's major unit.
+          description: Amount to charge in INR.
           example: 150.00
-        currency:
-          type: string
-          description: ISO 4217 currency code.
-          default: USD
-          example: USD
 
     # ── Venues & Events (new) ────────────────────────────────────
 

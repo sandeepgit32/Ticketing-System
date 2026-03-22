@@ -55,6 +55,7 @@ The service expects the following MySQL tables from `services/database/init.sql`
 Key points:
 - `seats` is normalized by `(event_id, seat_id)` and tracks `occupied`, `reservation_id`, and `price`.
 - `reservations.seats` and `bookings.seats` are JSON payloads.
+- `reservations.total_amount` stores the reservation total used by payment capture and webhook booking creation.
 - Reservation and booking status transitions are recorded in MySQL.
 
 ## Redis Usage

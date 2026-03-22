@@ -109,7 +109,7 @@ async def create_intent(payload: dict, idempotency_key: str = Header(None)):
     Args:
         payload: Payment details supplied by the caller.  Must include
             ``intent_id`` (a caller-generated UUID) and should include
-            ``amount`` and ``currency``.
+            ``amount``.
         idempotency_key: Optional client-generated unique key (HTTP header).
 
     Returns:
@@ -132,7 +132,6 @@ async def create_intent(payload: dict, idempotency_key: str = Header(None)):
         "intent_id": intent_id,
         "status": "requires_confirmation",
         "amount": payload.get("amount"),
-        "currency": payload.get("currency"),
     }
 
     # Only persist to the idempotency store when a key was provided.

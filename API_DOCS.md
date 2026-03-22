@@ -293,6 +293,7 @@ Idempotency-Key: unique-key (optional)
   "reservation_id": "uuid",
   "event_id": "evt-abc123",
   "seats": ["A1", "A2"],
+  "total_amount": 150.00,
   "expires_at": "2026-02-07T12:10:00Z",
   "status": "reserved"
 }
@@ -322,8 +323,7 @@ Idempotency-Key: unique-key (optional)
 ```json
 {
   "intent_id": "uuid",
-  "amount": 150.00,
-  "currency": "USD"
+  "amount": 150.00
 }
 ```
 
@@ -332,8 +332,7 @@ Idempotency-Key: unique-key (optional)
 {
   "intent_id": "uuid",
   "status": "requires_confirmation",
-  "amount": 150.00,
-  "currency": "USD"
+  "amount": 150.00
 }
 ```
 
@@ -441,7 +440,6 @@ Idempotency-Key: unique-key (optional)
 ```json
 {
   "amount": 100.00,
-  "currency": "USD",
   "metadata": {
     "reservation_id": "uuid"
   }

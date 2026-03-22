@@ -56,7 +56,7 @@
             </div>
             <div class="detail-item">
               <span class="detail-label">Total Amount:</span>
-              <span class="detail-value amount">${{ booking.total_amount }}</span>
+              <span class="detail-value amount">₹{{ formatAmount(booking.total_amount) }}</span>
             </div>
           </div>
         </div>
@@ -122,7 +122,7 @@
                 </div>
                 <div class="ticket-detail">
                   <span>Total</span>
-                  <strong>{{ formatCurrency(selectedBooking.total_amount) }}</strong>
+                  <strong>₹{{ formatAmount(selectedBooking.total_amount) }}</strong>
                 </div>
                 <div class="ticket-detail">
                   <span>Booked On</span>
@@ -240,15 +240,13 @@ const formatDate = (dateString) => {
   })
 }
 
-const formatCurrency = (amount) => {
+const formatAmount = (amount) => {
   if (amount === null || amount === undefined || amount === '') return 'N/A'
 
   const value = Number(amount)
   if (Number.isNaN(value)) return String(amount)
 
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
-    currency: 'USD',
+  return new Intl.NumberFormat('en-IN', {
     maximumFractionDigits: 2
   }).format(value)
 }
@@ -411,7 +409,7 @@ const generateTicketPdf = async (booking) => {
   const detailHeight = 18
   const details = [
     { label: 'SEATS', value: formatSeats(booking.seats) },
-    { label: 'TOTAL', value: formatCurrency(booking.total_amount) },
+    { label: 'TOTAL', value: formatAmount(booking.total_amount) },
     { label: 'BOOKED', value: formatDate(booking.created_at) },
     { label: 'PAYMENT', value: formatTicketStatus(booking.payment_status || booking.status) }
   ]

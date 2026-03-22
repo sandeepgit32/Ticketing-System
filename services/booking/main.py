@@ -214,6 +214,22 @@ def build_seat_index_map(venue_cfg: Optional[dict]) -> dict:
     return {seat_id: idx for idx, seat_id in enumerate(seat_order)}
 
 
+def _calculate_total_amount(venue_cfg: dict, seat_ids: list[str]) -> float:
+    """Calculate the total reservation amount from venue row pricing."""
+    seat_price_by_row = venue_cfg.get("seat_price", {}) or {}
+    total_amount = 0.0
+
+    for seat_id in seat_ids:
+        row, _ = _parse_seat_id(seat_id)
+        price = seat_price_by_row.get(row, 0)
+        try:
+            total_amount += float(price) if price is not None else 0.0
+        except Exception:
+            total_amount += 0.0
+
+    return round(total_amount, 2)
+
+
 def _require_admin_role(
     x_user_email: Optional[str], x_user_role: Optional[str]
 ) -> None:
@@ -269,6 +285,7 @@ async def _reserve_seats_in_db(
     reservation_id: str,
     user_email: str,
     normalized_seats: list[str],
+    total_amount: float,
     expires_at: int,
 ) -> None:
     """Persist a seat reservation to MySQL within a single serialisable transaction.
@@ -297,6 +314,7 @@ async def _reserve_seats_in_db(
             ``reservations`` row for ownership tracking and notifications.
         normalized_seats: List of normalised seat IDs (e.g. ``["A1", "B2"]``)
             whose rows will be locked and updated.
+        total_amount: Computed reservation amount stored on the reservation row.
         expires_at: Unix timestamp (seconds) stored as the reservation's
             ``expires_at`` value; converted to a UTC datetime before insert.
 
@@ -362,14 +380,15 @@ async def _reserve_seats_in_db(
         )
         # Insert the reservation row with status "reserved" and the computed expiry time.
         cursor.execute(
-            """INSERT INTO reservations (reservation_id, event_id, user_email, status, seats, expires_at)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
+            """INSERT INTO reservations (reservation_id, event_id, user_email, status, seats, total_amount, expires_at)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
             (
                 reservation_id,
                 event_id,
                 user_email,
                 "reserved",
                 json.dumps(normalized_seats),
+                total_amount,
                 datetime.fromtimestamp(expires_at, tz=timezone.utc),
             ),
         )
@@ -1148,8 +1167,9 @@ async def reserve(
             detail="Venue configuration not found or invalid for event",
         )
     seat_index_map = build_seat_index_map(venue_cfg)
+    total_amount = _calculate_total_amount(venue_cfg, normalized_seats)
 
-    seat_indexes = [seat_index_map.get(seat_id) for seat_id in normalized_seats]
+    seat_indexes = []
     for seat_id in normalized_seats:
         seat_idx = seat_index_map.get(seat_id)
         if seat_idx is None:
@@ -1168,6 +1188,7 @@ async def reserve(
             reservation_id,
             user_email,
             normalized_seats,
+            total_amount,
             expires_at,
         )
     except Exception:
@@ -1185,6 +1206,7 @@ async def reserve(
             "event_id": req.event_id,
             "event_name": f"Event {req.event_id}",
             "seats": normalized_seats,
+            "total_amount": total_amount,
             "expires_at": expires_at_iso,
         },
     }
@@ -1194,6 +1216,7 @@ async def reserve(
         "reservation_id": reservation_id,
         "event_id": req.event_id,
         "seats": normalized_seats,
+        "total_amount": total_amount,
         "expires_at": expires_at_iso,
         "status": "reserved",
     }
@@ -1235,8 +1258,7 @@ async def payments_capture(
 
                 {
                     "intent_id": "a3f1c2d4-...",
-                    "amount": 5000,
-                    "currency": "usd"
+                    "amount": 5000
                 }
 
         idempotency_key: Optional ``Idempotency-Key`` header value forwarded
@@ -1251,8 +1273,7 @@ async def payments_capture(
             {
                 "intent_id": "a3f1c2d4-...",
                 "status": "pending",
-                "amount": 5000,
-                "currency": "usd"
+                "amount": 5000
             }
 
     Raises:
@@ -1360,7 +1381,7 @@ async def payments_webhook(request: Request):
     if event == "capture_succeeded":
         # Payment successful - create booking
         booking_id = str(uuid.uuid4())
-        reservation_id = payload.get("intent_id", "unknown")
+        reservation_id = payload.get("intent_id")
 
         # Ensure DB is available
         database_pool = require_db_pool(db_pool)
@@ -1375,6 +1396,8 @@ async def payments_webhook(request: Request):
             )
 
             if reservation:
+                reservation_total_amount = float(reservation.get("total_amount") or 0)
+
                 # Create booking
                 execute_query(
                     database_pool,
@@ -1388,7 +1411,7 @@ async def payments_webhook(request: Request):
                         "confirmed",
                         reservation["seats"],
                         "completed",
-                        100.00,
+                        reservation_total_amount,
                     ),
                 )
 
@@ -1416,7 +1439,7 @@ async def payments_webhook(request: Request):
                         "event_id": reservation["event_id"],
                         "event_name": f"Event {reservation['event_id']}",
                         "seats": seats,
-                        "total_amount": 100.00,
+                        "total_amount": reservation_total_amount,
                     },
                 }
                 await redis_client.lpush(NOTIFICATION_QUEUE, json.dumps(notification))

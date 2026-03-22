@@ -55,16 +55,14 @@ Creates a new payment intent.
 ```json
 {
   "intent_id": "550e8400-e29b-41d4-a716-446655440000",
-  "amount": 4999,
-  "currency": "usd"
+  "amount": 4999
 }
 ```
 
 | Field       | Required | Description                                      |
 |-------------|----------|--------------------------------------------------|
 | `intent_id` | Yes      | Caller-generated UUID (e.g. the reservation ID). |
-| `amount`    | No       | Amount in the smallest currency unit (cents).    |
-| `currency`  | No       | ISO 4217 currency code.                          |
+| `amount`    | No       | Amount in INR.                                    |
 
 **Response `200`**
 
@@ -72,8 +70,7 @@ Creates a new payment intent.
 {
   "intent_id": "550e8400-e29b-41d4-a716-446655440000",
   "status": "requires_confirmation",
-  "amount": 4999,
-  "currency": "usd"
+  "amount": 4999
 }
 ```
 
