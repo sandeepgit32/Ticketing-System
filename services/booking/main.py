@@ -377,6 +377,71 @@ async def _reserve_seats_in_db(
         conn.close()
 
 
+async def _apply_redis_seat_hold(
+    event_id: str,
+    reservation_id: str,
+    user_email: str,
+    expires_at: int,
+    seat_indexes: list[int],
+) -> None:
+    """Atomically mark seats as held in Redis using the `redis_reserve.lua` Lua script.
+
+    Derives the three Redis keys required by the Lua script from `event_id` and
+    `reservation_id` (bitmap key, reservation hash key, TTL sorted-set key) and
+    invokes ``redis_reserve.lua`` via EVALSHA.
+
+    The Lua script checks each bit in the seat bitmap, sets the bits for all
+    requested `seat_indexes`, stores reservation metadata in a Redis hash, and
+    adds the reservation to the TTL sorted set — all within a single atomic
+    operation.  If any seat is already taken the script returns a ``SEAT_TAKEN``
+    error instead of partially applying the hold.
+
+    Args:
+        event_id: UUID of the target event; used to build Redis key names.
+        reservation_id: UUID generated for this reservation; used as the Redis
+            hash key suffix and stored inside the hash as the owner identifier.
+        user_email: Email address of the reserving user; stored in the Redis
+            reservation hash for downstream expiry and notification use.
+        expires_at: Unix timestamp (seconds) at which the hold should expire.
+            Passed to the Lua script to populate the TTL sorted set score.
+        seat_indexes: Zero-based integer indexes into the venue seat bitmap
+            corresponding to each requested seat.  The Lua script uses these to
+            set and check individual bitmap bits.
+
+    Raises:
+        HTTPException(409): If one or more seats are already held (either the
+            Lua script returns a non-OK status or raises ``SEAT_TAKEN``).
+        HTTPException(503): If an unexpected Redis error occurs (e.g. connection
+            failure, script not loaded).
+    """
+    bitmap_key, reservation_key, ttl_key = _reservation_redis_keys(
+        event_id, reservation_id
+    )
+    try:
+        hold_result = await redis_client.evalsha(
+            reserve_sha,
+            3,
+            bitmap_key,
+            reservation_key,
+            ttl_key,
+            reservation_id,
+            event_id,
+            user_email,
+            str(expires_at),
+            str(RESERVATION_TTL_SECONDS),
+            json.dumps(seat_indexes),
+        )
+        if not hold_result or hold_result[0] != "OK":
+            raise HTTPException(status_code=409, detail="Seats are no longer available")
+    except HTTPException:
+        raise
+    except Exception as e:
+        if "SEAT_TAKEN" in str(e):
+            raise HTTPException(status_code=409, detail="Seats are no longer available")
+        print(f"Error applying Redis hold: {e}")
+        raise HTTPException(status_code=503, detail="reservation service unavailable")
+
+
 async def _release_redis_hold(
     event_id: str, reservation_id: str, seat_indexes: list[int]
 ) -> None:
@@ -714,7 +779,7 @@ async def list_events():
     try:
         rows_db = fetch_all(
             database_pool,
-            """SELECT e.event_id, e.name, e.start_time, e.venue,
+            """SELECT e.event_id, e.name, e.start_time, e.venue, e.closed,
                       COUNT(CASE WHEN s.occupied = 0 THEN 1 END) AS num_seats_available,
                       GROUP_CONCAT(DISTINCT CASE WHEN s.occupied = 0 THEN s.price END
                                    ORDER BY s.price) AS available_prices
@@ -754,6 +819,7 @@ async def list_events():
                     "date": date_only,
                     "num_seats_available": int(event.get("num_seats_available") or 0),
                     "list_of_prices": list_of_prices,
+                    "closed": int(event.get("closed") or 0),
                 }
             )
     except Exception as e:
@@ -866,6 +932,17 @@ async def create_event(
 
     event_id = str(uuid.uuid4())
 
+    try:
+        start_time = datetime.fromisoformat(req.start_time)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid start_time format")
+
+    now = datetime.now(start_time.tzinfo) if start_time.tzinfo else datetime.now()
+    if start_time <= now:
+        raise HTTPException(
+            status_code=400, detail="Event start_time must be in the future"
+        )
+
     if req.venue and venues_config.get(req.venue) is None:
         raise HTTPException(status_code=400, detail="Unknown venue")
 
@@ -941,11 +1018,10 @@ async def close_event(
             start_time = start_time.replace(tzinfo=timezone.utc)
 
         now_utc = datetime.now(timezone.utc)
+        warning_message = None
         if now_utc <= start_time:
-            raise HTTPException(
-                status_code=409,
-                detail="Event cannot be closed before or at start_time",
-            )
+            warning_message = "Event is being closed before its start_time"
+            print(f"Warning: closing event {event_id} before start_time")
 
         cursor.execute(
             "SELECT reservation_id FROM reservations WHERE event_id = %s",
@@ -986,72 +1062,10 @@ async def close_event(
         except Exception:
             pass
 
-    return {"event_id": event_id, "status": "closed"}
-
-
-async def _apply_redis_seat_hold(
-    event_id: str,
-    reservation_id: str,
-    user_email: str,
-    expires_at: int,
-    seat_indexes: list[int],
-) -> None:
-    """Atomically mark seats as held in Redis using the `redis_reserve.lua` Lua script.
-
-    Derives the three Redis keys required by the Lua script from `event_id` and
-    `reservation_id` (bitmap key, reservation hash key, TTL sorted-set key) and
-    invokes ``redis_reserve.lua`` via EVALSHA.
-
-    The Lua script checks each bit in the seat bitmap, sets the bits for all
-    requested `seat_indexes`, stores reservation metadata in a Redis hash, and
-    adds the reservation to the TTL sorted set — all within a single atomic
-    operation.  If any seat is already taken the script returns a ``SEAT_TAKEN``
-    error instead of partially applying the hold.
-
-    Args:
-        event_id: UUID of the target event; used to build Redis key names.
-        reservation_id: UUID generated for this reservation; used as the Redis
-            hash key suffix and stored inside the hash as the owner identifier.
-        user_email: Email address of the reserving user; stored in the Redis
-            reservation hash for downstream expiry and notification use.
-        expires_at: Unix timestamp (seconds) at which the hold should expire.
-            Passed to the Lua script to populate the TTL sorted set score.
-        seat_indexes: Zero-based integer indexes into the venue seat bitmap
-            corresponding to each requested seat.  The Lua script uses these to
-            set and check individual bitmap bits.
-
-    Raises:
-        HTTPException(409): If one or more seats are already held (either the
-            Lua script returns a non-OK status or raises ``SEAT_TAKEN``).
-        HTTPException(503): If an unexpected Redis error occurs (e.g. connection
-            failure, script not loaded).
-    """
-    bitmap_key, reservation_key, ttl_key = _reservation_redis_keys(
-        event_id, reservation_id
-    )
-    try:
-        hold_result = await redis_client.evalsha(
-            reserve_sha,
-            3,
-            bitmap_key,
-            reservation_key,
-            ttl_key,
-            reservation_id,
-            event_id,
-            user_email,
-            str(expires_at),
-            str(RESERVATION_TTL_SECONDS),
-            json.dumps(seat_indexes),
-        )
-        if not hold_result or hold_result[0] != "OK":
-            raise HTTPException(status_code=409, detail="Seats are no longer available")
-    except HTTPException:
-        raise
-    except Exception as e:
-        if "SEAT_TAKEN" in str(e):
-            raise HTTPException(status_code=409, detail="Seats are no longer available")
-        print(f"Error applying Redis hold: {e}")
-        raise HTTPException(status_code=503, detail="reservation service unavailable")
+    response = {"event_id": event_id, "status": "closed"}
+    if warning_message:
+        response["warning"] = warning_message
+    return response
 
 
 @app.post("/bookings/reserve", status_code=201)

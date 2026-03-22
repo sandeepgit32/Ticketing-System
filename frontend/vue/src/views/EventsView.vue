@@ -29,7 +29,12 @@
 
         <div class="form-row">
           <label for="event-start">Start time</label>
-          <input id="event-start" v-model="newEvent.start_time" type="datetime-local" />
+          <input
+            id="event-start"
+            v-model="newEvent.start_time"
+            type="datetime-local"
+            :min="minStartTime"
+          />
         </div>
 
         <div class="form-status">
@@ -55,7 +60,7 @@
 
     <div class="events-grid" v-else>
       <BaseCard
-        v-for="event in events"
+        v-for="event in visibleEvents"
         :key="event.event_id"
         hover
         class="event-card"
@@ -91,7 +96,7 @@
       </BaseCard>
     </div>
 
-    <div v-if="!isLoading && events.length === 0" class="empty-state">
+    <div v-if="!isLoading && visibleEvents.length === 0" class="empty-state">
       <div class="empty-icon">🎫</div>
       <h3>No Events Available</h3>
       <p>Check back later for upcoming events</p>
@@ -120,7 +125,21 @@ const creatingEvent = ref(false)
 const createError = ref('')
 const createSuccess = ref('')
 const newEvent = ref({ name: '', venue: '', start_time: '' })
+const visibleEvents = computed(() => events.value.filter((event) => Number(event.closed || 0) !== 1))
 const canManageEvents = computed(() => authStore.isAdmin)
+
+const pad = (value) => String(value).padStart(2, '0')
+
+const toDatetimeLocalValue = (date) => {
+  const year = date.getFullYear()
+  const month = pad(date.getMonth() + 1)
+  const day = pad(date.getDate())
+  const hours = pad(date.getHours())
+  const minutes = pad(date.getMinutes())
+  return `${year}-${month}-${day}T${hours}:${minutes}`
+}
+
+const minStartTime = computed(() => toDatetimeLocalValue(new Date()))
 
 const formatDate = (dateString) => {
   const date = new Date(dateString)
@@ -179,6 +198,12 @@ const createEvent = async () => {
 
   if (!newEvent.value.name || !newEvent.value.venue || !newEvent.value.start_time) {
     createError.value = 'Please fill in all fields.'
+    return
+  }
+
+  const selectedStart = new Date(newEvent.value.start_time)
+  if (Number.isNaN(selectedStart.getTime()) || selectedStart <= new Date()) {
+    createError.value = 'Please choose a future start time.'
     return
   }
 

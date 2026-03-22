@@ -1,11 +1,53 @@
 <template>
   <div class="booking-container">
     <div class="booking-header">
-      <button @click="$router.back()" class="back-button">
-        ← Back to Events
-      </button>
+      <div class="booking-header-top">
+        <button @click="$router.back()" class="back-button">
+          ← Back to Events
+        </button>
+        <BaseButton
+          v-if="canCloseEvent"
+          variant="danger"
+          @click="openCloseModal"
+        >
+          Close Event
+        </BaseButton>
+      </div>
       <h1 class="booking-title">{{ eventName }}</h1>
+      <p v-if="closeError" class="close-error">{{ closeError }}</p>
     </div>
+
+    <transition name="modal-fade">
+      <div
+        v-if="showCloseModal"
+        class="modal-backdrop"
+        @click.self="showCloseModal = false"
+      >
+        <section class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="close-event-title">
+          <div class="confirm-modal-icon">⚠️</div>
+          <h2 id="close-event-title" class="confirm-modal-title">Close this event?</h2>
+          <p class="confirm-modal-text">
+            This will permanently close {{ eventName || 'this event' }} and remove it from the events list for all users.
+          </p>
+          <p v-if="isBeforeStartTime" class="confirm-modal-warning">
+            Warning: this event has not started yet. Closing it now will hide it from all users immediately.
+          </p>
+
+          <div class="confirm-modal-actions">
+            <BaseButton variant="secondary" @click="showCloseModal = false">
+              Cancel
+            </BaseButton>
+            <BaseButton
+              variant="danger"
+              :loading="isClosingEvent"
+              @click="handleCloseEvent"
+            >
+              Close Event
+            </BaseButton>
+          </div>
+        </section>
+      </div>
+    </transition>
 
     <div class="booking-content">
       <!-- Seat Selection Step -->
@@ -191,18 +233,24 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBookingStore } from '../stores/booking'
+import { useAuthStore } from '../stores/auth'
+import { bookingAPI } from '../services/api'
 import BaseCard from '../components/BaseCard.vue'
 import BaseButton from '../components/BaseButton.vue'
 
 const route = useRoute()
 const router = useRouter()
 const bookingStore = useBookingStore()
+const authStore = useAuthStore()
 
 const step = ref('select') // 'select', 'payment', 'confirmed'
 const selectedSeats = ref([])
 const paymentMethod = ref('card')
 const processingPayment = ref(false)
 const paymentError = ref('')
+const closeError = ref('')
+const isClosingEvent = ref(false)
+const showCloseModal = ref(false)
 
 const reservationId = ref('')
 const bookingId = ref('')
@@ -210,6 +258,14 @@ const reservedSeats = ref('')
 
 const eventId = computed(() => route.params.id)
 const eventName = ref('')
+const canCloseEvent = computed(() => authStore.isAdmin && Number(bookingStore.currentEvent?.closed || 0) !== 1)
+const isBeforeStartTime = computed(() => {
+  const startTime = bookingStore.currentEvent?.start_time
+  if (!startTime) return false
+  const start = new Date(startTime)
+  if (Number.isNaN(start.getTime())) return false
+  return new Date() <= start
+})
 
 const totalPrice = computed(() => {
   if (!bookingStore.currentEvent || !bookingStore.currentEvent.seat_price_map) return 0
@@ -299,10 +355,33 @@ const cancelReservation = () => {
   paymentError.value = ''
 }
 
+const openCloseModal = () => {
+  closeError.value = ''
+  showCloseModal.value = true
+}
+
+const handleCloseEvent = async () => {
+  isClosingEvent.value = true
+  closeError.value = ''
+
+  try {
+    await bookingAPI.closeEvent(eventId.value)
+    showCloseModal.value = false
+    router.replace('/events')
+  } catch (error) {
+    closeError.value = error.response?.data?.detail || 'Failed to close the event.'
+  } finally {
+    isClosingEvent.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     const eventData = await bookingStore.loadEvent(eventId.value)
     eventName.value = eventData?.name || ''
+    if (Number(eventData?.closed || 0) === 1) {
+      router.replace('/events')
+    }
   } catch (error) {
     console.error('Failed to load event:', error)
   }
@@ -320,6 +399,14 @@ onMounted(async () => {
 
 .booking-header {
   margin-bottom: 2rem;
+}
+
+.booking-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
 }
 
 .back-button {
@@ -342,6 +429,84 @@ onMounted(async () => {
   font-weight: 700;
   color: #111827;
   margin: 0;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  z-index: 200;
+}
+
+.confirm-modal {
+  width: min(100%, 28rem);
+  background: #ffffff;
+  border-radius: 1rem;
+  padding: 1.75rem;
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.24);
+  text-align: center;
+}
+
+.confirm-modal-icon {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 9999px;
+  margin: 0 auto 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fef3c7;
+  font-size: 1.5rem;
+}
+
+.confirm-modal-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #111827;
+  margin: 0 0 0.75rem;
+}
+
+.confirm-modal-text {
+  color: #4b5563;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.confirm-modal-warning {
+  margin: 1rem 0 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: #fffbeb;
+  color: #92400e;
+  border: 1px solid #f59e0b;
+  line-height: 1.5;
+}
+
+.confirm-modal-actions {
+  display: flex;
+  justify-content: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.close-error {
+  margin-top: 0.75rem;
+  color: #b91c1c;
+  font-size: 0.95rem;
+}
+
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
 }
 
 .seat-selection {

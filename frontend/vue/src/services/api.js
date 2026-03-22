@@ -49,6 +49,7 @@ export const bookingAPI = {
   listEvents: () => apiClient.get('/booking/events'),
   getEvent: (eventId) => apiClient.get(`/booking/events/${eventId}`),
   createEvent: (eventData) => apiClient.post('/booking/events', eventData),
+  closeEvent: (eventId) => apiClient.get(`/booking/events/${eventId}/close`),
   listVenues: () => apiClient.get('/booking/venues'),
   reserve: (data) => apiClient.post('/booking/bookings/reserve', data),
   capturePayment: (data) => apiClient.post('/booking/payments/capture', data)
