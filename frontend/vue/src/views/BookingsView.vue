@@ -106,8 +106,8 @@
           <div class="ticket-visual">
             <div class="ticket-main">
               <div class="ticket-badge-row">
-                <span class="ticket-badge">Admit One</span>
-                <span class="ticket-code">{{ selectedBooking.booking_id }}</span>
+                <span class="ticket-code">Ticket ID: {{ selectedBooking.booking_id }}</span>
+                <span class="ticket-badge">Booked by: {{ selectedBooking.user_email || 'Unknown' }}</span>
               </div>
 
               <div class="ticket-event-block">
@@ -150,24 +150,18 @@
             </div>
           </div>
 
-          <div class="ticket-footer">
-            <div class="ticket-meta">
-              <span>User</span>
-              <strong>{{ selectedBooking.user_email }}</strong>
-            </div>
-            <div class="ticket-actions ticket-modal-actions">
-              <BaseButton variant="secondary" @click="closeTicketModal">
-                Close
-              </BaseButton>
-              <BaseButton
-                v-if="selectedBooking.status === 'confirmed'"
-                variant="primary"
-                :loading="isDownloadingTicket && downloadingBookingId === selectedBooking.booking_id"
-                @click="downloadTicket(selectedBooking)"
-              >
-                Download Ticket
-              </BaseButton>
-            </div>
+          <div class="ticket-actions ticket-modal-actions">
+            <BaseButton variant="secondary" @click="closeTicketModal">
+              Close
+            </BaseButton>
+            <BaseButton
+              v-if="selectedBooking.status === 'confirmed'"
+              variant="primary"
+              :loading="isDownloadingTicket && downloadingBookingId === selectedBooking.booking_id"
+              @click="downloadTicket(selectedBooking)"
+            >
+              Download Ticket
+            </BaseButton>
           </div>
         </section>
       </div>
@@ -809,7 +803,6 @@ onMounted(async () => {
   font-size: 0.8rem;
   font-weight: 700;
   letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .ticket-code {
@@ -940,6 +933,7 @@ onMounted(async () => {
   display: flex;
   gap: 0.75rem;
   justify-content: flex-end;
+  margin-top: 1rem;
 }
 
 .ticket-fade-enter-active,
