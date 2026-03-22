@@ -1,18 +1,35 @@
 import os
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Request, Depends, status
-from fastapi.responses import Response
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi.middleware.cors import CORSMiddleware
+
 import httpx
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+
+def required_env(key: str, cast=str):
+    """Return the value of an environment variable or raise if missing.
+
+    Args:
+        key: The name of the environment variable.
+        cast: Optional callable to cast the string value.
+
+    Raises:
+        RuntimeError: if the environment variable is not set.
+    """
+
+    value = os.environ.get(key)
+    if value is None:
+        raise RuntimeError(f"Missing required environment variable: {key}")
+    return cast(value)
+
 
 # Configuration
-AUTH_SERVICE_URL = os.getenv("AUTH_SERVICE_URL", "http://auth:8000")
-BOOKING_SERVICE_URL = os.getenv("BOOKING_SERVICE_URL", "http://booking:8000")
-BOOKING_STATUS_SERVICE_URL = os.getenv(
-    "BOOKING_STATUS_SERVICE_URL", "http://booking-status:8000"
-)
-PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", "http://payment-mock:9000")
+AUTH_SERVICE_URL = required_env("AUTH_SERVICE_URL")
+BOOKING_SERVICE_URL = required_env("BOOKING_SERVICE_URL")
+BOOKING_STATUS_SERVICE_URL = required_env("BOOKING_STATUS_SERVICE_URL")
+PAYMENT_SERVICE_URL = required_env("PAYMENT_SERVICE_URL")
 
 app = FastAPI(title="API Gateway", version="1.0.0")
 

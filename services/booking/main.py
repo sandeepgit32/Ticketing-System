@@ -1197,20 +1197,20 @@ async def reserve(
 
     expires_at_iso = datetime.fromtimestamp(expires_at, tz=timezone.utc).isoformat()
 
-    # Enqueue confirmation notification.
-    notification = {
-        "type": "reservation_confirmed",
-        "data": {
-            "user_email": user_email,
-            "reservation_id": reservation_id,
-            "event_id": req.event_id,
-            "event_name": f"Event {req.event_id}",
-            "seats": normalized_seats,
-            "total_amount": total_amount,
-            "expires_at": expires_at_iso,
-        },
-    }
-    await redis_client.lpush(NOTIFICATION_QUEUE, json.dumps(notification))
+    # # Uncomment the following block to enable notifications on reservation creation.
+    # notification = {
+    #     "type": "reservation_confirmed",
+    #     "data": {
+    #         "user_email": user_email,
+    #         "reservation_id": reservation_id,
+    #         "event_id": req.event_id,
+    #         "event_name": f"Event {req.event_id}",
+    #         "seats": normalized_seats,
+    #         "total_amount": total_amount,
+    #         "expires_at": expires_at_iso,
+    #     },
+    # }
+    # await redis_client.lpush(NOTIFICATION_QUEUE, json.dumps(notification))
 
     response = {
         "reservation_id": reservation_id,

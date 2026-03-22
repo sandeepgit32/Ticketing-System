@@ -25,8 +25,6 @@ services:
       database:
         condition: service_healthy
     env_file: ./services/auth/.env
-    ports:
-      - "8002:8000"
 
   booking-status:
     build: ./services/booking-status
@@ -36,8 +34,6 @@ services:
       auth:
         condition: service_started
     env_file: ./services/booking-status/.env
-    ports:
-      - "8003:8000"
 
   booking:
     build: ./services/booking
@@ -47,16 +43,12 @@ services:
       redis:
         condition: service_started
     env_file: ./services/booking/.env
-    ports:
-      - "8001:8000"
 
   payment-mock:
     build: ./services/payment/mock
     depends_on:
       - redis
     env_file: ./services/payment/mock/.env
-    ports:
-      - "9001:9000"
 
   notification:
     build: ./services/notification
