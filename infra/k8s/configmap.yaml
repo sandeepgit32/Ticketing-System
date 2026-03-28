@@ -23,9 +23,13 @@ data:
   FROM_EMAIL: "noreply@ticketing-system.com"
 
   # Service endpoint URLs for gateway coordination
-  AUTH_URL: "http://ticketing-system-auth:8000"
-  BOOKING_URL: "http://ticketing-system-booking:8000"
-  BOOKING_STATUS_URL: "http://ticketing-system-booking-status:8000"
-  PAYMENT_URL: "http://ticketing-system-payment-mock:8000"
+  AUTH_SERVICE_URL: "http://ticketing-system-auth:8000"
+  BOOKING_SERVICE_URL: "http://ticketing-system-booking:8000"
+  BOOKING_STATUS_SERVICE_URL: "http://ticketing-system-booking-status:8000"
+  PAYMENT_SERVICE_URL: "http://ticketing-system-payment-mock:8000"
   NOTIFICATION_URL: "http://ticketing-system-notification:9000"
   FRONTEND_BACKEND_URL: "http://ticketing-system-gateway:8000"
+
+  # Payment webhook config
+  BOOKING_WEBHOOK_URL: "http://ticketing-system-booking:8000/payments/webhook"
+  WEBHOOK_SECRET: "secret"

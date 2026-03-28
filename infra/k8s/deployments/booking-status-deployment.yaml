@@ -15,6 +15,7 @@ spec:
       containers:
         - name: booking-status
           image: booking-status:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           envFrom:

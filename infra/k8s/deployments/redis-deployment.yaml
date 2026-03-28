@@ -15,6 +15,7 @@ spec:
       containers:
         - name: redis
           image: redis:7
+          imagePullPolicy: IfNotPresent
           command: ["redis-server", "--save", "", "--appendonly", "no"]
           ports:
             - containerPort: 6379

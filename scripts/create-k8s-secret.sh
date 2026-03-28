@@ -68,15 +68,15 @@ kind: Secret
 metadata:
   name: ticketing-system-credentials
 stringData:
-  jwt-secret: "${JWT_SECRET_KEY}"
-  mysql-root-password: "${MYSQL_ROOT_PASSWORD}"
-  mysql-password: "${MYSQL_PASSWORD}"
-  smtp-host: "${SMTP_HOST}"
-  smtp-port: "${SMTP_PORT}"
-  smtp-user: "${SMTP_USER}"
-  smtp-password: "${SMTP_PASSWORD}"
-  default-admin-email: "${DEFAULT_ADMIN_EMAIL}"
-  default-admin-password: "${DEFAULT_ADMIN_PASSWORD}"
+  JWT_SECRET_KEY: "${JWT_SECRET_KEY}"
+  MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
+  MYSQL_PASSWORD: "${MYSQL_PASSWORD}"
+  SMTP_HOST: "${SMTP_HOST}"
+  SMTP_PORT: "${SMTP_PORT}"
+  SMTP_USER: "${SMTP_USER}"
+  SMTP_PASSWORD: "${SMTP_PASSWORD}"
+  DEFAULT_ADMIN_EMAIL: "${DEFAULT_ADMIN_EMAIL}"
+  DEFAULT_ADMIN_PASSWORD: "${DEFAULT_ADMIN_PASSWORD}"
 EOF
 
 echo "✅  Generated $OUT"

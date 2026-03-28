@@ -28,6 +28,7 @@ SECRET_TEMPLATE="$K8S_DIR/secret.example.yaml"
 AUTH_ENV="$REPO_ROOT/services/auth/.env"
 DB_ENV="$REPO_ROOT/services/database/.env"
 NOTIF_ENV="$REPO_ROOT/services/notification/.env"
+PAYMENT_ENV="$REPO_ROOT/services/payment/mock/.env"
 FRONTEND_PORT_FORWARD_PID=""
 
 require_cmd() {
@@ -80,6 +81,8 @@ write_secret_from_values() {
   local smtp_password=$7
   local default_admin_email=$8
   local default_admin_password=$9
+  local webhook_secret=${10}
+  local booking_webhook_url=${11}
 
   cat > "$SECRET_OUT" <<EOF
 apiVersion: v1
@@ -87,15 +90,17 @@ kind: Secret
 metadata:
   name: ticketing-system-credentials
 stringData:
-  jwt-secret: "$jwt_secret"
-  mysql-root-password: "$mysql_root_password"
-  mysql-password: "$mysql_password"
-  smtp-host: "$smtp_host"
-  smtp-port: "$smtp_port"
-  smtp-user: "$smtp_user"
-  smtp-password: "$smtp_password"
-  default-admin-email: "$default_admin_email"
-  default-admin-password: "$default_admin_password"
+  JWT_SECRET_KEY: "$jwt_secret"
+  MYSQL_ROOT_PASSWORD: "$mysql_root_password"
+  MYSQL_PASSWORD: "$mysql_password"
+  SMTP_HOST: "$smtp_host"
+  SMTP_PORT: "$smtp_port"
+  SMTP_USER: "$smtp_user"
+  SMTP_PASSWORD: "$smtp_password"
+  DEFAULT_ADMIN_EMAIL: "$default_admin_email"
+  DEFAULT_ADMIN_PASSWORD: "$default_admin_password"
+  WEBHOOK_SECRET: "$webhook_secret"
+  BOOKING_WEBHOOK_URL: "$booking_webhook_url"
 EOF
 }
 
@@ -113,6 +118,8 @@ write_secret_manually() {
   smtp_password=$(prompt "SMTP password")
   default_admin_email=$(prompt "Default admin email" "admin@example.com")
   default_admin_password=$(prompt "Default admin password")
+  webhook_secret=$(prompt "Payment webhook secret")
+  booking_webhook_url=$(prompt "Booking webhook URL" "http://ticketing-system-booking:8000/payments/webhook")
 
   write_secret_from_values \
     "$(trim "$jwt_secret")" \
@@ -123,7 +130,9 @@ write_secret_manually() {
     "$(trim "$smtp_user")" \
     "$(trim "$smtp_password")" \
     "$(trim "$default_admin_email")" \
-    "$(trim "$default_admin_password")"
+    "$(trim "$default_admin_password")" \
+    "$(trim "$webhook_secret")" \
+    "$(trim "$booking_webhook_url")"
 }
 
 write_secret_from_env_files() {
@@ -131,6 +140,7 @@ write_secret_from_env_files() {
   [[ -f "$AUTH_ENV" ]] || { echo "ERROR: Missing $AUTH_ENV" >&2; exit 1; }
   [[ -f "$DB_ENV" ]] || { echo "ERROR: Missing $DB_ENV" >&2; exit 1; }
   [[ -f "$NOTIF_ENV" ]] || { echo "ERROR: Missing $NOTIF_ENV" >&2; exit 1; }
+  [[ -f "$PAYMENT_ENV" ]] || { echo "ERROR: Missing $PAYMENT_ENV" >&2; exit 1; }
 
   # Load values into the current shell.
   # shellcheck disable=SC1090
@@ -139,6 +149,8 @@ write_secret_from_env_files() {
   source "$DB_ENV"
   # shellcheck disable=SC1090
   source "$NOTIF_ENV"
+  # shellcheck disable=SC1090
+  source "$PAYMENT_ENV"
 
   : "${JWT_SECRET_KEY:?Missing JWT_SECRET_KEY in services/auth/.env}"
   : "${MYSQL_ROOT_PASSWORD:?Missing MYSQL_ROOT_PASSWORD in services/database/.env}"
@@ -149,6 +161,8 @@ write_secret_from_env_files() {
   : "${SMTP_PASSWORD:?Missing SMTP_PASSWORD in services/notification/.env}"
   : "${DEFAULT_ADMIN_EMAIL:?Missing DEFAULT_ADMIN_EMAIL in services/auth/.env}"
   : "${DEFAULT_ADMIN_PASSWORD:?Missing DEFAULT_ADMIN_PASSWORD in services/auth/.env}"
+  : "${WEBHOOK_SECRET:?Missing WEBHOOK_SECRET in services/payment/mock/.env}"
+  : "${BOOKING_WEBHOOK_URL:?Missing BOOKING_WEBHOOK_URL in services/payment/mock/.env}"
 
   write_secret_from_values \
     "$JWT_SECRET_KEY" \
@@ -159,7 +173,9 @@ write_secret_from_env_files() {
     "$SMTP_USER" \
     "$SMTP_PASSWORD" \
     "$DEFAULT_ADMIN_EMAIL" \
-    "$DEFAULT_ADMIN_PASSWORD"
+    "$DEFAULT_ADMIN_PASSWORD" \
+    "$WEBHOOK_SECRET" \
+    "$BOOKING_WEBHOOK_URL"
 }
 
 use_existing_secret_file() {
@@ -185,7 +201,20 @@ use_existing_repo_secret() {
 }
 
 apply_keda_manifests() {
-  # KEDA is optional; apply it only when the folder exists.
+  # KEDA is optional; install CRDs/controller first (if needed) before applying ScaledObjects.
+  local KEDA_VERSION=${KEDA_VERSION:-2.10.0}
+  local KEDA_INSTALL_URL="https://github.com/kedacore/keda/releases/download/v${KEDA_VERSION}/keda-${KEDA_VERSION}.yaml"
+
+  if ! kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then
+    echo "KEDA CRDs not found: installing KEDA $KEDA_VERSION..."
+    kubectl apply -f "$KEDA_INSTALL_URL"
+
+    echo "Waiting for KEDA operator to be ready..."
+    kubectl -n keda rollout status deployment/keda-operator --timeout=180s || true
+  else
+    echo "KEDA CRDs already present; skipping KEDA controller install."
+  fi
+
   if [[ -d "$K8S_DIR/keda" ]]; then
     kubectl apply -f "$K8S_DIR/keda/"
   fi
@@ -201,6 +230,7 @@ build_images() {
   docker build -t gateway:latest "$REPO_ROOT/services/gateway"
   docker build -t notification:latest "$REPO_ROOT/services/notification"
   docker build -t payment-mock:latest "$REPO_ROOT/services/payment/mock"
+  docker build -t ticketing-system-mysql:latest "$REPO_ROOT/services/database"
   docker build -t frontend:latest "$REPO_ROOT/frontend/vue"
 }
 
@@ -208,9 +238,9 @@ apply_manifests() {
   # Apply the core workload and service manifests in a safe order.
   kubectl apply -f "$K8S_DIR/secret.yaml"
   kubectl apply -f "$K8S_DIR/configmap.yaml"
-  kubectl apply -f "$K8S_DIR/mysql-pvc.yaml"
   kubectl apply -f "$K8S_DIR/services/"
   kubectl apply -f "$K8S_DIR/deployments/"
+  kubectl apply -f "$K8S_DIR/statefulsets/"
 }
 
 start_frontend_port_forward() {
@@ -269,8 +299,17 @@ main() {
 
   # Make sure Minikube is running before we build images or apply resources.
   echo "Starting Minikube..."
-  minikube start
+  minikube start --driver=docker --wait=true --wait-timeout=5m --addons=default-storageclass --addons=metrics-server
   kubectl config use-context minikube >/dev/null
+
+  # Wait for API readiness before doing further work to avoid addon race conditions.
+  echo "Waiting for kube-apiserver readiness..."
+  for i in {1..30}; do
+    if kubectl get --raw /healthz >/dev/null 2>&1; then
+      break
+    fi
+    sleep 2
+  done
 
   # Build all service images inside the Minikube Docker environment.
   build_images

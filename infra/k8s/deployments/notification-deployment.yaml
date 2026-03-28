@@ -15,20 +15,27 @@ spec:
       containers:
         - name: notification
           image: notification:latest
-          ports:
-            - containerPort: 9000
+          imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:
                 name: ticketing-system-credentials
             - configMapRef:
                 name: ticketing-system-config
-          readinessProbe:
-            tcpSocket:
-              port: 9000
-            initialDelaySeconds: 10
-            periodSeconds: 30
+          # Notification is a worker that polls Redis, not an HTTP server.
+          # probe ensures container starts and stays alive rather than testing TCP socket.
+          startupProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - "[ -e /tmp ]" # simple always-true test for startup readiness
+            failureThreshold: 30
+            periodSeconds: 10
           livenessProbe:
-            tcpSocket:
-              port: 9000
-            initialDelaySeconds: 10
+            exec:
+              command:
+                - sh
+                - -c
+                - "[ -e /tmp ]" # maintain running health for this worker
+            initialDelaySeconds: 30
             periodSeconds: 30

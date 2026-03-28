@@ -15,6 +15,7 @@ spec:
       containers:
         - name: payment-mock
           image: payment-mock:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           envFrom:

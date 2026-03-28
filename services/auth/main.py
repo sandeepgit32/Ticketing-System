@@ -110,6 +110,8 @@ def seed_default_admin_user() -> None:
         )
         conn.commit()
         print(f"Ensured default admin user exists for {DEFAULT_ADMIN_EMAIL}")
+    except Exception as e:
+        print(f"Error seeding default admin user: {e}")
     finally:
         cursor.close()
         conn.close()

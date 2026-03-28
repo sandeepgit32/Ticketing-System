@@ -15,6 +15,7 @@ spec:
       containers:
         - name: booking
           image: booking:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
           envFrom:
@@ -22,13 +23,19 @@ spec:
                 name: ticketing-system-credentials
             - configMapRef:
                 name: ticketing-system-config
+          startupProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 30
           readinessProbe:
             tcpSocket:
               port: 8000
-            initialDelaySeconds: 3
+            initialDelaySeconds: 30
             periodSeconds: 10
           livenessProbe:
             tcpSocket:
               port: 8000
-            initialDelaySeconds: 10
+            initialDelaySeconds: 60
             periodSeconds: 20

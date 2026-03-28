@@ -15,6 +15,7 @@ spec:
       containers:
         - name: frontend
           image: frontend:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 5173
           envFrom:

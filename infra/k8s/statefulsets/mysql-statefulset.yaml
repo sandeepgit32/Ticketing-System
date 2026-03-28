@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ticketing-system-mysql
+spec:
+  serviceName: ticketing-system-mysql
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ticketing-system-mysql
+  template:
+    metadata:
+      labels:
+        app: ticketing-system-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: ticketing-system-mysql:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: ticketing-system-credentials
+            - configMapRef:
+                name: ticketing-system-config
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            tcpSocket:
+              port: 3306
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 3306
+            initialDelaySeconds: 30
+            periodSeconds: 15
+  volumeClaimTemplates:
+    - metadata:
+        name: mysql-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi
+        storageClassName: standard
+
