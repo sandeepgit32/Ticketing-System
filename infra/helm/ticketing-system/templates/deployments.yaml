@@ -1,0 +1,125 @@
+{{- $global := .Values.global -}}
+{{- range $name, $cfg := .Values.services -}}
+{{- if $cfg.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ticketing-system.fullname" $. }}-{{ $name }}
+  labels:
+    {{ include "ticketing-system.labels" $. | nindent 4 }}
+spec:
+  replicas: {{ $cfg.replicas | default 1 }}
+  selector:
+    matchLabels:
+      app: {{ include "ticketing-system.fullname" $. }}-{{ $name }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "ticketing-system.fullname" $. }}-{{ $name }}
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: {{ $cfg.image }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ $cfg.port }}
+          env:
+            - name: REDIS_URL
+              value: {{ $global.redis.url | quote }}
+            - name: MYSQL_HOST
+              value: {{ $global.mysql.host | quote }}
+            - name: MYSQL_PORT
+              value: {{ $global.mysql.port | quote }}
+            - name: MYSQL_USER
+              value: {{ $global.mysql.user | quote }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: mysql-password
+            - name: MYSQL_DATABASE
+              value: {{ $global.mysql.database | quote }}
+          resources:
+            requests:
+              cpu: {{ $.Values.resources.requests.cpu }}
+              memory: {{ $.Values.resources.requests.memory }}
+            limits:
+              cpu: {{ $.Values.resources.limits.cpu }}
+              memory: {{ $.Values.resources.limits.memory }}
+          {{- if eq $name "auth" }}
+            - name: JWT_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: jwt-secret
+            - name: ACCESS_TOKEN_EXPIRE_MINUTES
+              value: "30"
+            - name: DEFAULT_ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: default-admin-email
+            - name: DEFAULT_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: default-admin-password
+            - name: DEFAULT_ADMIN_FULL_NAME
+              value: "System Admin"
+          {{- end }}
+          {{- if eq $name "booking" }}
+            - name: RESERVATION_TTL_SECONDS
+              value: "300"
+          {{- end }}
+          {{- if eq $name "gateway" }}
+            - name: AUTH_URL
+              value: "http://{{ include "ticketing-system.fullname" $. }}-auth:8000"
+            - name: BOOKING_URL
+              value: "http://{{ include "ticketing-system.fullname" $. }}-booking:8000"
+            - name: BOOKING_STATUS_URL
+              value: "http://{{ include "ticketing-system.fullname" $. }}-booking-status:8000"
+            - name: PAYMENT_URL
+              value: "http://{{ include "ticketing-system.fullname" $. }}-payment-mock:8000"
+            - name: NOTIFICATION_URL
+              value: "http://{{ include "ticketing-system.fullname" $. }}-notification:8000"
+          {{- end }}
+          {{- if eq $name "notification" }}
+            - name: SMTP_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: smtp-host
+            - name: SMTP_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: smtp-port
+            - name: SMTP_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: smtp-user
+            - name: SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: smtp-password
+            - name: FROM_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: smtp-user
+          {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ $cfg.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: {{ $cfg.port }}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+---
+{{- end }}
+{{- end }}

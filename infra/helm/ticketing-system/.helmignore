@@ -1,0 +1,10 @@
+# Common Kubernetes unwanted files
+*.md
+*.yaml
+*.yml
+*.DS_Store
+.git
+.gitignore
+*.swp
+.idea
+.vscode

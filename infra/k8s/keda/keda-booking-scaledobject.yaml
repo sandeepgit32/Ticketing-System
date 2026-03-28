@@ -1,15 +1,15 @@
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
-  name: booking-worker-scaledobject
+  name: ticketing-system-booking-scaledobject
 spec:
   scaleTargetRef:
-    name: booking-worker
+    name: ticketing-system-booking
   minReplicaCount: 1
   maxReplicaCount: 20
   triggers:
     - type: redis
       metadata:
-        address: redis:6379
+        address: ticketing-system-redis:6379
         listName: queue:jobs
-        listLength: '10'
+        listLength: "10"

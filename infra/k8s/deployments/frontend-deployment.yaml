@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-system-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ticketing-system-frontend
+  template:
+    metadata:
+      labels:
+        app: ticketing-system-frontend
+    spec:
+      containers:
+        - name: frontend
+          image: frontend:latest
+          ports:
+            - containerPort: 5173
+          envFrom:
+            - configMapRef:
+                name: ticketing-system-config
+          readinessProbe:
+            tcpSocket:
+              port: 5173
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 5173
+            initialDelaySeconds: 10
+            periodSeconds: 20

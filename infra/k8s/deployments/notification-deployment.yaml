@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-system-notification
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ticketing-system-notification
+  template:
+    metadata:
+      labels:
+        app: ticketing-system-notification
+    spec:
+      containers:
+        - name: notification
+          image: notification:latest
+          ports:
+            - containerPort: 9000
+          envFrom:
+            - secretRef:
+                name: ticketing-system-credentials
+            - configMapRef:
+                name: ticketing-system-config
+          readinessProbe:
+            tcpSocket:
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          livenessProbe:
+            tcpSocket:
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 30

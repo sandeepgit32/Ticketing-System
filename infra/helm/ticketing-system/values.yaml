@@ -1,0 +1,98 @@
+global:
+  namespace: default
+  imagePullPolicy: IfNotPresent
+  redis:
+    host: ticketing-system-redis
+    port: 6379
+    database: 0
+    url: "redis://ticketing-system-redis:6379/0"
+  mysql:
+    host: ticketing-system-mysql
+    port: 3306
+    user: ticketing
+    password: ticketing
+    database: ticketing
+
+mysql:
+  enabled: true
+  image: mysql:8.0
+  rootPassword: root
+  persistence:
+    enabled: true
+    size: 5Gi
+
+redis:
+  enabled: true
+  image: redis:7
+
+services:
+  auth:
+    enabled: true
+    image: auth:latest
+    port: 8000
+    replicas: 1
+  booking:
+    enabled: true
+    image: booking:latest
+    port: 8000
+    replicas: 1
+  bookingStatus:
+    enabled: true
+    image: booking-status:latest
+    port: 8000
+    replicas: 1
+  paymentMock:
+    enabled: true
+    image: payment-mock:latest
+    port: 8000
+    replicas: 1
+  notification:
+    enabled: true
+    image: notification:latest
+    replicas: 1
+  gateway:
+    enabled: true
+    image: gateway:latest
+    port: 8000
+    replicas: 1
+    serviceType: NodePort
+    nodePort: 30080
+  frontend:
+    enabled: true
+    image: frontend:latest
+    port: 5173
+    replicas: 1
+    serviceType: NodePort
+    nodePort: 30090
+
+keda:
+  enabled: true
+  trigger:
+    booking:
+      listName: queue:jobs
+      listLength: "10"
+    notification:
+      listName: queue:notifications
+      listLength: "5"
+    paymentMock:
+      listName: queue:payments
+      listLength: "5"
+
+secrets:
+  jwtSecret: "CHANGEME"
+  mysqlRootPassword: "CHANGEME"
+  mysqlPassword: "CHANGEME"
+  smtpHost: "smtp.example.com"
+  smtpPort: "2525"
+  smtpUser: "user@example.com"
+  smtpPassword: "CHANGEME"
+  defaultAdminEmail: "admin@example.com"
+  defaultAdminPassword: "CHANGEME"
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi

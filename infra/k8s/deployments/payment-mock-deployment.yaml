@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-system-payment-mock
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ticketing-system-payment-mock
+  template:
+    metadata:
+      labels:
+        app: ticketing-system-payment-mock
+    spec:
+      containers:
+        - name: payment-mock
+          image: payment-mock:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: ticketing-system-config
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20

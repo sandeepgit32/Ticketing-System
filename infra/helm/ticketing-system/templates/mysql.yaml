@@ -1,0 +1,70 @@
+{{- if .Values.mysql.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "ticketing-system.fullname" . }}-mysql
+  labels:
+    {{ include "ticketing-system.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ include "ticketing-system.fullname" . }}-mysql
+  template:
+    metadata:
+      labels:
+        app: {{ include "ticketing-system.fullname" . }}-mysql
+    spec:
+      containers:
+        - name: mysql
+          image: {{ .Values.mysql.image }}
+          imagePullPolicy: {{ $.Values.global.imagePullPolicy }}
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" . }}-credentials
+                  key: mysql-root-password
+            - name: MYSQL_DATABASE
+              value: {{ .Values.global.mysql.database | quote }}
+            - name: MYSQL_USER
+              value: {{ .Values.global.mysql.user | quote }}
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" . }}-credentials
+                  key: mysql-password
+          ports:
+            - containerPort: 3306
+          volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: {{ include "ticketing-system.fullname" . }}-mysql-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ticketing-system.fullname" . }}-mysql
+spec:
+  type: ClusterIP
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: 3306
+  selector:
+    app: {{ include "ticketing-system.fullname" . }}-mysql
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "ticketing-system.fullname" . }}-mysql-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.mysql.persistence.size }}
+{{- end }}

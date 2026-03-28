@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ticketing-system-config
+data:
+  # Auth service config
+  ACCESS_TOKEN_EXPIRE_MINUTES: "60"
+  DEFAULT_ADMIN_FULL_NAME: "System Admin"
+
+  # Database config
+  MYSQL_HOST: "ticketing-system-mysql"
+  MYSQL_PORT: "3306"
+  MYSQL_USER: "ticketuser"
+  MYSQL_DATABASE: "ticketing"
+
+  # Redis / queues
+  REDIS_URL: "redis://ticketing-system-redis:6379/0"
+  RESERVATION_TTL_SECONDS: "300"
+
+  # Notification service config
+  SMTP_HOST: "sandbox.smtp.mailtrap.io"
+  SMTP_PORT: "2525"
+  FROM_EMAIL: "noreply@ticketing-system.com"
+
+  # Service endpoint URLs for gateway coordination
+  AUTH_URL: "http://ticketing-system-auth:8000"
+  BOOKING_URL: "http://ticketing-system-booking:8000"
+  BOOKING_STATUS_URL: "http://ticketing-system-booking-status:8000"
+  PAYMENT_URL: "http://ticketing-system-payment-mock:8000"
+  NOTIFICATION_URL: "http://ticketing-system-notification:9000"
+  FRONTEND_BACKEND_URL: "http://ticketing-system-gateway:8000"

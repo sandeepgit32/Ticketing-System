@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-system-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ticketing-system-gateway
+  template:
+    metadata:
+      labels:
+        app: ticketing-system-gateway
+    spec:
+      containers:
+        - name: gateway
+          image: gateway:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: ticketing-system-config
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20

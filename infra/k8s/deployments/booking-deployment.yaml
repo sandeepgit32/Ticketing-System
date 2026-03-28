@@ -1,0 +1,34 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-system-booking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ticketing-system-booking
+  template:
+    metadata:
+      labels:
+        app: ticketing-system-booking
+    spec:
+      containers:
+        - name: booking
+          image: booking:latest
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: ticketing-system-credentials
+            - configMapRef:
+                name: ticketing-system-config
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 20

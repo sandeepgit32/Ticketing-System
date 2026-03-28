@@ -1,0 +1,30 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-system-redis
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ticketing-system-redis
+  template:
+    metadata:
+      labels:
+        app: ticketing-system-redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7
+          command: ["redis-server", "--save", "", "--appendonly", "no"]
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 6379
+            initialDelaySeconds: 10
+            periodSeconds: 10

@@ -1,0 +1,15 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: ticketing-system-notification-scaledobject
+spec:
+  scaleTargetRef:
+    name: ticketing-system-notification
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  triggers:
+    - type: redis
+      metadata:
+        address: ticketing-system-redis:6379
+        listName: queue:notifications
+        listLength: "5"
