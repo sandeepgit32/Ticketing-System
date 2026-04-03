@@ -6,7 +6,7 @@ import bcrypt
 import jwt
 
 # import mysql.connector
-from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from mysql.connector import pooling

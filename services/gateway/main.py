@@ -31,12 +31,15 @@ BOOKING_SERVICE_URL = required_env("BOOKING_SERVICE_URL")
 BOOKING_STATUS_SERVICE_URL = required_env("BOOKING_STATUS_SERVICE_URL")
 PAYMENT_SERVICE_URL = required_env("PAYMENT_SERVICE_URL")
 
+# For browser-based frontend, set explicit CORS origin(s). Example: http://localhost:5173,http://localhost:5174
+FRONTEND_ORIGINS = required_env("FRONTEND_ORIGINS", cast=lambda v: [o.strip() for o in v.split(",") if o.strip()])
+
 app = FastAPI(title="API Gateway", version="1.0.0")
 
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins = FRONTEND_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

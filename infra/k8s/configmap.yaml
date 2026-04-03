@@ -29,6 +29,7 @@ data:
   PAYMENT_SERVICE_URL: "http://ticketing-system-payment-mock:8000"
   NOTIFICATION_URL: "http://ticketing-system-notification:9000"
   FRONTEND_BACKEND_URL: "http://ticketing-system-gateway:8000"
+  FRONTEND_ORIGINS: "http://localhost:5173,http://localhost:5174,http://127.0.0.1:30090"
 
   # Payment webhook config
   BOOKING_WEBHOOK_URL: "http://ticketing-system-booking:8000/payments/webhook"
