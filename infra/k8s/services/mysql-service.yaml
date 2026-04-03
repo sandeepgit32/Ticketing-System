@@ -3,10 +3,12 @@ kind: Service
 metadata:
   name: ticketing-system-mysql
 spec:
-  clusterIP: None
+  type: NodePort
   selector:
     app: ticketing-system-mysql
   ports:
-    - protocol: TCP
+    - name: mysql
+      protocol: TCP
       port: 3306
       targetPort: 3306
+      nodePort: 30306

@@ -223,6 +223,8 @@ apply_keda_manifests() {
 build_images() {
   # Build each service image inside Minikube's Docker daemon so the cluster can pull it locally.
   echo "Building images inside Minikube's Docker daemon..."
+  # eval "$(minikube -p minikube docker-env)" is the recommended way to set the environment for 
+  # Docker commands to use Minikube's Docker daemon. It works across different shells and platforms.
   eval "$(minikube docker-env)"
   docker build -t auth:latest "$REPO_ROOT/services/auth"
   docker build -t booking:latest "$REPO_ROOT/services/booking"
