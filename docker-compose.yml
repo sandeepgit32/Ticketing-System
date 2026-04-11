@@ -79,3 +79,9 @@ services:
 
 volumes:
   mysql_data:
+
+networks:
+  # Default network created by docker-compose
+  # All services can communicate via service name (e.g., http://prometheus:9090)
+  ticketing-network:
+    driver: bridge

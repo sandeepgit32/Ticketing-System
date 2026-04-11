@@ -1,0 +1,109 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: tempo-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 200Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tempo
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tempo
+  template:
+    metadata:
+      labels:
+        app: tempo
+    spec:
+      containers:
+        - name: tempo
+          image: grafana/tempo:latest
+          ports:
+            - containerPort: 3200
+              name: tempo
+            - containerPort: 3201
+              name: grpc
+            - containerPort: 4317
+              name: otlp-grpc
+            - containerPort: 4318
+              name: otlp-http
+            - containerPort: 14250
+              name: jaeger-grpc
+          args:
+            - -config.file=/etc/tempo/tempo-config.yaml
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tempo
+            - name: storage
+              mountPath: /var/tempo
+          resources:
+            requests:
+              cpu: 1
+              memory: 2Gi
+            limits:
+              cpu: 2
+              memory: 4Gi
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 3200
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 3200
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+      volumes:
+        - name: config
+          configMap:
+            name: tempo-config
+        - name: storage
+          persistentVolumeClaim:
+            claimName: tempo-data
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  namespace: default
+  labels:
+    app: tempo
+spec:
+  type: NodePort
+  ports:
+    - port: 3200
+      targetPort: 3200
+      nodePort: 30020
+      name: tempo
+    - port: 3201
+      targetPort: 3201
+      name: grpc
+    - port: 4317
+      targetPort: 4317
+      nodePort: 30431
+      name: otlp-grpc
+    - port: 4318
+      targetPort: 4318
+      nodePort: 30431
+      name: otlp-http
+    - port: 14250
+      targetPort: 14250
+      nodePort: 31425
+      name: jaeger-grpc
+  selector:
+    app: tempo

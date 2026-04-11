@@ -34,3 +34,15 @@ data:
   # Payment webhook config
   BOOKING_WEBHOOK_URL: "http://ticketing-system-booking:8000/payments/webhook"
   WEBHOOK_SECRET: "secret"
+
+  # Observability (PLTG) configuration
+  PROMETHEUS_ENDPOINT: "http://prometheus:9090"
+  LOKI_ENDPOINT: "http://loki:3100"
+  TEMPO_ENDPOINT: "http://tempo:3200"
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+  OTEL_EXPORTER_OTLP_PROTOCOL: "grpc"
+  OTEL_SDK_DISABLED: "false"
+  OTEL_TRACES_EXPORTER: "otlp"
+  OTEL_METRICS_EXPORTER: "prometheus"
+  OTEL_PROPAGATORS: "tracecontext"
+  LOG_LEVEL: "INFO"

@@ -8,6 +8,49 @@ from email.mime.text import MIMEText
 
 import redis
 
+# ==================== PLTG Stack Imports ====================
+# Notification service is a background worker that:
+# - Logs detailed processing events
+# - Tracks message throughput and latency
+# - Instruments job execution with tracing
+import sys
+
+sys.path.insert(0, "/app/../common")
+from logging_config import setup_logging, get_logger, trace_context
+from tracing_config import setup_tracing, traced_function
+from prometheus_client import Counter, Histogram, CollectorRegistry, push_to_gateway
+
+# Initialize structured logging for worker process
+setup_logging(service_name="notification", log_level="INFO")
+logger = get_logger(__name__)
+
+# Initialize distributed tracing to Tempo
+setup_tracing(
+    service_name="notification", tempo_host="tempo", environment="development"
+)
+
+# Define custom metrics for queue and notification processing
+# Metrics are pushed to Prometheus Pushgateway since this is a background worker
+# (no HTTP server to expose /metrics endpoint)
+queue_messages_processed_total = Counter(
+    name="queue_messages_processed_total",
+    documentation="Total messages processed from notification queue",
+    labelnames=["status"],  # success or failed
+)
+
+notification_send_latency_seconds = Histogram(
+    name="notification_send_latency_seconds",
+    documentation="Time taken to send a notification (seconds)",
+    labelnames=["notification_type"],
+    buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0),
+)
+
+email_send_total = Counter(
+    name="email_send_total",
+    documentation="Total emails sent",
+    labelnames=["status"],  # success or failed
+)
+
 
 def required_env(key: str, cast=str):
     """Read an environment variable and raise an error if it is missing.

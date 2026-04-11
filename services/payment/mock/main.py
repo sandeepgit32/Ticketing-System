@@ -28,7 +28,55 @@ import redis.asyncio as redis
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.background import BackgroundTasks
 
+# ==================== PLTG Stack Imports ====================
+# Payment service instruments:
+# - Logging: Payment processing events, webhook delivery
+# - Metrics: Intent creation, success/failure rates, latency
+# - Tracing: Complete payment flow with webhook delivery
+import sys
+
+sys.path.insert(0, "/app/../common")
+from logging_config import setup_logging, get_logger, get_trace_id
+from tracing_config import setup_tracing, traced_function
+from prometheus_client import make_asgi_app, Counter, Histogram
+
+# Initialize structured logging
+setup_logging(service_name="payment", log_level="INFO")
+logger = get_logger(__name__)
+
+# Initialize distributed tracing to Tempo
+setup_tracing(service_name="payment", tempo_host="tempo", environment="development")
+
+# Define custom metrics for payment operations
+payment_intents_created_total = Counter(
+    name="payment_intents_created_total", documentation="Total payment intents created"
+)
+
+payment_capture_total = Counter(
+    name="payment_capture_total", documentation="Total payment capture attempts"
+)
+
+payment_capture_succeeded_total = Counter(
+    name="payment_capture_succeeded_total", documentation="Successful payment captures"
+)
+
+payment_capture_failed_total = Counter(
+    name="payment_capture_failed_total",
+    documentation="Failed payment captures",
+    labelnames=["reason"],
+)
+
+payment_capture_latency_seconds = Histogram(
+    name="payment_capture_latency_seconds",
+    documentation="Payment capture latency including webhook delivery (seconds)",
+    buckets=(0.1, 0.5, 1.0, 2.0, 5.0, 10.0),
+)
+
 app = FastAPI(title="Mock Payment Provider")
+
+# ==================== Mount Prometheus Metrics Endpoint ====================
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 redis_client: Optional[redis.Redis] = None
 

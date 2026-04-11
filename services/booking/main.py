@@ -14,6 +14,54 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from mysql.connector import pooling
 from schema import CreateEventRequest, PaymentCaptureRequest, ReserveRequest
 
+# ==================== PLTG Stack Imports ====================
+# Booking service uses all three observability layers:
+# - Logging: Track reservations, conflicts, state changes
+# - Metrics: Monitor booking rate, seat availability, failure rate
+# - Tracing: Visualize complete booking flow including Redis operations
+import sys
+
+sys.path.insert(0, "/app/../common")
+from logging_config import setup_logging, get_logger, get_trace_id
+from tracing_config import setup_tracing, get_tracer
+from prometheus_client import make_asgi_app, Counter, Gauge, Histogram
+
+# Initialize structured logging
+setup_logging(service_name="booking", log_level="INFO")
+logger = get_logger(__name__)
+
+# Initialize distributed tracing to Tempo
+setup_tracing(service_name="booking", tempo_host="tempo", environment="development")
+
+# Get tracer for manual span creation (used in Redis/DB operations)
+tracer = get_tracer(__name__)
+
+# Define custom metrics for booking operations
+booking_reserved_total = Counter(
+    name="booking_reserved_total",
+    documentation="Total successful seat reservations",
+    labelnames=["venue"],
+)
+
+booking_reservation_failed_total = Counter(
+    name="booking_reservation_failed_total",
+    documentation="Failed reservation attempts",
+    labelnames=["failure_reason"],
+)
+
+booking_available_seats = Gauge(
+    name="booking_available_seats",
+    documentation="Number of available seats",
+    labelnames=["venue"],
+)
+
+booking_reservation_latency_seconds = Histogram(
+    name="booking_reservation_latency_seconds",
+    documentation="Reservation operation latency (seconds) including Redis + MySQL",
+    labelnames=["operation"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
 
 def required_env(key: str, cast=str):
     """Return the value of an environment variable or raise if missing.
@@ -46,6 +94,11 @@ MYSQL_DATABASE = required_env("MYSQL_DATABASE")
 NOTIFICATION_QUEUE = "queue:notifications"
 
 app = FastAPI(title="Booking Service")
+
+# ==================== Mount Prometheus Metrics Endpoint ====================
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
+
 redis_client: Optional[redis.Redis] = None
 
 # SHA1 hashes of the loaded Redis Lua scripts.

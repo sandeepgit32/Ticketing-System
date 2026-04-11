@@ -1,33 +1,43 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ticketing-system-payment-mock
+  name: ticketing-system-booking-status
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ticketing-system-payment-mock
+      app: ticketing-system-booking-status
   template:
     metadata:
       labels:
-        app: ticketing-system-payment-mock
+        app: ticketing-system-booking-status
     spec:
       containers:
-        - name: payment-mock
-          image: payment-mock:latest
+        - name: booking-status
+          image: booking-status:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
+          ports:
+            - containerPort: 8000
+              name: http
           envFrom:
+            - secretRef:
+                name: ticketing-system-credentials
             - configMapRef:
                 name: ticketing-system-config
+          env:
+            - name: SERVICE_NAME
+              value: booking-status
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: 8000
             initialDelaySeconds: 3
             periodSeconds: 10
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 20

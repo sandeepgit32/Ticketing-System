@@ -10,6 +10,43 @@ from mysql.connector import pooling
 # (`/app`) is on sys.path inside the container.
 from schemas import BookingDetails, UserBookingsResponse
 
+# ==================== PLTG Stack Imports ====================
+# Booking Status service provides read-only queries:
+# - Logging: Query operations and results
+# - Metrics: Query latency, booking lookups
+# - Tracing: End-to-end request tracking for status page queries
+import sys
+
+sys.path.insert(0, "/app/../common")
+from logging_config import setup_logging, get_logger
+from tracing_config import setup_tracing
+from prometheus_client import make_asgi_app, Histogram, Counter
+
+# Initialize structured logging
+setup_logging(service_name="booking-status", log_level="INFO")
+logger = get_logger(__name__)
+
+# Initialize distributed tracing to Tempo
+setup_tracing(
+    service_name="booking-status", tempo_host="tempo", environment="development"
+)
+
+# Define custom metrics for status queries
+booking_status_query_latency_seconds = Histogram(
+    name="booking_status_query_latency_seconds",
+    documentation="Booking status query latency (seconds)",
+    labelnames=["query_type"],
+    buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
+booking_details_fetched_total = Counter(
+    name="booking_details_fetched_total", documentation="Total booking detail queries"
+)
+
+user_bookings_fetched_total = Counter(
+    name="user_bookings_fetched_total", documentation="Total user bookings queries"
+)
+
 
 def required_env(key: str, cast=str):
     """Return the value of an environment variable or raise if missing.
@@ -37,6 +74,25 @@ MYSQL_DATABASE = required_env("MYSQL_DATABASE")
 
 app = Flask(__name__)
 CORS(app, origins="*", supports_credentials=True)
+
+
+# ==================== Mount Prometheus Metrics Endpoint ====================
+# For Flask, we need to add a route to expose Prometheus metrics
+# Prometheus will scrape: http://booking-status:8003/metrics
+@app.route("/metrics", methods=["GET"])
+def metrics():
+    """Expose Prometheus metrics in Prometheus text format."""
+    from prometheus_client import (
+        generate_latest,
+        CollectorRegistry,
+        CONTENT_TYPE_LATEST,
+    )
+    from prometheus_client import REGISTRY
+
+    response = generate_latest(REGISTRY)
+    return response, 200, {"Content-Type": CONTENT_TYPE_LATEST}
+
+
 db_pool = None
 
 

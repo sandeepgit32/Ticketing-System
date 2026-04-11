@@ -1,35 +1,41 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ticketing-system-booking-status
+  name: ticketing-system-gateway
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ticketing-system-booking-status
+      app: ticketing-system-gateway
   template:
     metadata:
       labels:
-        app: ticketing-system-booking-status
+        app: ticketing-system-gateway
     spec:
       containers:
-        - name: booking-status
-          image: booking-status:latest
+        - name: gateway
+          image: gateway:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8000
+              name: http
+            - containerPort: 8001
+              name: metrics
           envFrom:
-            - secretRef:
-                name: ticketing-system-credentials
             - configMapRef:
                 name: ticketing-system-config
+          env:
+            - name: SERVICE_NAME
+              value: gateway
           readinessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: 8000
-            initialDelaySeconds: 3
+            initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
-            tcpSocket:
+            httpGet:
+              path: /health
               port: 8000
             initialDelaySeconds: 10
             periodSeconds: 20

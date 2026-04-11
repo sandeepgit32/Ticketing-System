@@ -232,19 +232,141 @@ Services as Deployments
 - Secrets for sensitive data
 ```
 
-## Monitoring & Observability
+## Monitoring & Observability (PLTG Stack)
 
-### Current Logging
-- Console logs for all services
-- Docker logs aggregation
-- View with: `docker compose logs -f`
+### Overview
+The system uses the PLTG stack (Prometheus, Loki, Tempo, Grafana) for comprehensive observability:
 
-### Future Enhancements
-- [ ] Prometheus metrics
-- [ ] Grafana dashboards
-- [ ] Distributed tracing (Jaeger)
-- [ ] ELK stack for log aggregation
-- [ ] Application Performance Monitoring (APM)
+- **Prometheus** (Port 9090): Metrics collection from all services
+  - Scrapes metrics every 15 seconds
+  - 7-day retention for development
+  - PromQL query language for metric analysis
+  
+- **Loki** (Port 3100): Log aggregation and search
+  - JSON-formatted logs with trace IDs
+  - LogQL query language for log search
+  - Correlation with traces and metrics
+  
+- **Tempo** (Port 3200): Distributed tracing backend
+  - Traces request flows across all services
+  - OTLP (OpenTelemetry Protocol) gRPC receiver (port 4317)
+  - Trace search and visualization
+  
+- **Grafana** (Port 3000): Unified dashboarding and alerting
+  - Real-time dashboards (metrics, logs, traces)
+  - Alert rules with multi-channel notification
+  - Default credentials: admin/admin
+
+### Observability Data Flow
+
+```
+API Request Flow:
+┌──────────┐ (X-Trace-ID: abc123)
+│ Frontend │
+└─────┬────┘
+      │
+      ▼
+┌─────────────────────────────────────────────┐
+│  API Gateway                                │
+│  • Generates Trace ID if missing            │
+│  • Logs request with trace ID               │
+│  • Creates span in Tempo                    │
+│  • Metrics: request_count, request_latency  │
+└────┬─────────────┬──────────┬───────────────┘
+     │             │          │
+     ▼             ▼          ▼
+  Auth       Booking      Payment
+  (span)      (span)       (span)
+  ├─logs    ├─logs         ├─logs
+  ├─metrics ├─metrics      ├─metrics
+  └─trace   └─trace        └─trace
+     │        │              │
+     └────────┴──────────────┘
+            │
+      ┌─────┴─────┐
+      ▼           ▼
+    Prometheus  Loki  Tempo
+    (metrics) (logs) (traces)
+      │         │      │
+      └─────────┴──────┘
+              │
+              ▼
+          Grafana
+     (unified dashboard)
+```
+
+### Key Metrics
+
+**HTTP Metrics:**
+- `http_requests_total`: Total requests by method, endpoint, status
+- `http_request_duration_seconds`: Latency histogram (P50, P95, P99)
+- `http_request_errors_total`: Error count by type
+
+**Business Metrics:**
+- `booking_reserved_total`: Booking count per venue
+- `payment_capture_total`: Payment volume
+- `queue_depth`: Messages waiting in notification queue
+
+**Resource Metrics:**
+- CPU, memory, disk usage from Prometheus Node Exporter
+- Database connection pool usage
+- Redis memory and clients
+
+### Log Search Examples
+
+Access Grafana at http://localhost:3000 and use LogQL:
+
+```logql
+# Find all errors
+{level="ERROR"}
+
+# Find errors for specific service
+{service="booking", level="ERROR"}
+
+# Find a specific user's activity (if logged)
+{trace_id="550e8400-e29b-41d4-a716-446655440000"}
+
+# Find slow requests
+{service="gateway"} | json | request_latency_ms > 1000
+```
+
+### Alert Rules
+
+Configured in `infra/observability/docker-compose/alert.rules.yml`:
+
+- **ServiceDown**: Service unreachable for 5+ minutes
+- **HighErrorRate**: >5% requests returning errors
+- **HighLatency**: P95 response time > 1 second
+- **RedisQueueBacklog**: Queue depth > 1000 for 10 minutes
+- **PaymentFailures**: >10% of payment captures failing
+
+### Documentation
+
+- **OBSERVABILITY.md** - PLTG stack overview and quick start
+- **INSTRUMENTATION.md** - Code instrumentation guide per service
+- **MONITORING.md** - How to monitor the system in production
+- **DASHBOARDS.md** - Dashboard guide and metric interpretation
+- **TROUBLESHOOTING.md** - Common issues and debug procedures
+- **ALERTS.md** - Alert meanings and response procedures
+
+### Implementation Details
+
+**Structured Logging:**
+- All logs output as JSON to make filtering/parsing easier
+- Trace ID injected in every log for correlation
+- Service name and level included for filtering
+
+**Distributed Tracing:**
+- Trace ID generated in API Gateway
+- Propagated via X-Trace-ID header to all services
+- Each service creates spans for operations
+- Spans include context (service, method, duration, status)
+
+**Metrics Collection:**
+- Prometheus middleware in each FastAPI service
+- Custom metrics for business logic (bookings, payments)
+- Queue metrics from Redis
+- 7-day retention (configurable)
 
 ## Technology Stack
 

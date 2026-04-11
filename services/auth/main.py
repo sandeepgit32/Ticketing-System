@@ -17,6 +17,52 @@ from mysql.connector import pooling
 # keeping this explicit avoids any relative‑import drama inside the container.
 from schemas import LoginRequest, RegisterRequest, TokenResponse, UserResponse
 
+# ==================== PLTG Stack Imports ====================
+# These enable comprehensive observability for the auth service:
+# - Logging: Structured JSON logging with trace ID correlation
+# - Metrics: Prometheus metrics for monitoring HTTP requests and auth events
+# - Tracing: Distributed tracing for request flow visualization
+import sys
+
+sys.path.insert(0, "/app/../common")  # Add common module to path
+from logging_config import setup_logging, get_logger
+from tracing_config import setup_tracing
+from prometheus_client import make_asgi_app, Counter, Histogram
+
+# Initialize structured logging (all logs will be JSON with trace IDs)
+setup_logging(service_name="auth", log_level="INFO")
+logger = get_logger(__name__)
+
+# Initialize distributed tracing to Tempo (port 4317)
+# This automatically instruments FastAPI for span creation
+setup_tracing(service_name="auth", tempo_host="tempo", environment="development")
+
+# Define custom Prometheus metrics for auth operations
+# Counter: tracks cumulative auth events (login, registration, token generation)
+auth_login_success_total = Counter(
+    name="auth_login_success_total",
+    documentation="Total successful user logins",
+    labelnames=["login_method"],
+)
+
+auth_login_failed_total = Counter(
+    name="auth_login_failed_total",
+    documentation="Total failed login attempts",
+    labelnames=["failure_reason"],
+)
+
+auth_registration_total = Counter(
+    name="auth_registration_total", documentation="Total user registrations"
+)
+
+# Histogram: tracks latency of token generation (in seconds)
+# Uses predefined buckets: 0.001, 0.005, 0.01, 0.025, 0.05, 0.1 seconds
+auth_token_generation_seconds = Histogram(
+    name="auth_token_generation_seconds",
+    documentation="JWT token generation latency (seconds)",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1),
+)
+
 
 def required_env(key: str, cast=str):
     """Return the value of an environment variable or raise if missing.
@@ -50,6 +96,12 @@ DEFAULT_ADMIN_PASSWORD = required_env("DEFAULT_ADMIN_PASSWORD")
 DEFAULT_ADMIN_FULL_NAME = os.environ.get("DEFAULT_ADMIN_FULL_NAME", "System Admin")
 
 app = FastAPI(title="Auth Service")
+
+# ==================== Mount Prometheus Metrics Endpoint ====================
+# Prometheus will scrape /metrics endpoint every 15 seconds (configured in prometheus.yml)
+# Exposes all Prometheus metrics collected by FastAPI middleware and custom metrics
+metrics_app = make_asgi_app()
+app.mount("/metrics", metrics_app)
 
 # Add CORS middleware
 app.add_middleware(

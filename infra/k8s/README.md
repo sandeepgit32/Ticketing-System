@@ -31,9 +31,9 @@ You have four options in `./scripts/run-minikube.sh`:
 - enter the secret values manually
 - read values from the service `.env` files
 - copy an existing secret YAML file
-- use the existing `infra/k8s/secret.yaml` already present in this repo
+- use the existing `infra/k8s/config/secret.yaml` already present in this repo
 
-The template file is `infra/k8s/secret.example.yaml`. Do not apply that file to the cluster; it is only a guide.
+The template file is `infra/k8s/config/secret.example.yaml`. Do not apply that file to the cluster; it is only a guide.
 
 If you want to generate the secret directly, run:
 

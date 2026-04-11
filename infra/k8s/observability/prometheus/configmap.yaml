@@ -1,0 +1,179 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: default
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      external_labels:
+        monitor: 'ticketing-system'
+        environment: 'minikube'
+
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: []
+
+    rule_files:
+      - '/etc/prometheus/alert.rules.yml'
+
+    scrape_configs:
+      # Prometheus self
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+
+      # Auth service
+      - job_name: 'auth'
+        static_configs:
+          - targets: ['ticketing-system-auth:8000']
+        metrics_path: '/metrics'
+        scrape_interval: 15s
+
+      # Booking service
+      - job_name: 'booking'
+        static_configs:
+          - targets: ['ticketing-system-booking:8000']
+        metrics_path: '/metrics'
+        scrape_interval: 15s
+
+      # Payment mock service
+      - job_name: 'payment'
+        static_configs:
+          - targets: ['ticketing-system-payment-mock:9000']
+        metrics_path: '/metrics'
+        scrape_interval: 15s
+
+      # Gateway
+      - job_name: 'gateway'
+        static_configs:
+          - targets: ['ticketing-system-gateway:8000']
+        metrics_path: '/metrics'
+        scrape_interval: 15s
+
+      # Booking Status (Flask)
+      - job_name: 'booking-status'
+        static_configs:
+          - targets: ['ticketing-system-booking-status:8000']
+        metrics_path: '/metrics'
+        scrape_interval: 15s
+
+      # MySQL exporter
+      - job_name: 'mysql'
+        static_configs:
+          - targets: ['mysql-exporter:9104']
+        scrape_interval: 15s
+
+      # Redis exporter
+      - job_name: 'redis'
+        static_configs:
+          - targets: ['redis-exporter:9121']
+        scrape_interval: 15s
+
+  alert.rules.yml: |
+    groups:
+      - name: ticketing-system
+        interval: 15s
+        rules:
+          # Service down
+          - alert: ServiceDown
+            expr: up == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Service down: {{ $labels.job }}"
+              description: "Service {{ $labels.job }} is down"
+
+          # High error rate
+          - alert: HighErrorRate
+            expr: (sum by (job) (increase(http_requests_total{status=~"5.."}[5m])) / sum by (job) (increase(http_requests_total[5m])) * 100) > 5
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High error rate in {{ $labels.job }}"
+              description: "Error rate in {{ $labels.job }} is above 5% (current: {{ $value | humanizePercentage }})"
+
+          # High latency
+          - alert: HighLatency
+            expr: histogram_quantile(0.95, sum(rate(http_request_latency_seconds_bucket[5m])) by (le, job)) > 1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High latency in {{ $labels.job }}"
+              description: "P95 latency in {{ $labels.job }} is above 1s (current: {{ $value | humanizeDuration }})"
+
+          # Critical latency
+          - alert: CriticalLatency
+            expr: histogram_quantile(0.95, sum(rate(http_request_latency_seconds_bucket[5m])) by (le, job)) > 5
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Critical latency in {{ $labels.job }}"
+              description: "P95 latency in {{ $labels.job }} is above 5s (current: {{ $value | humanizeDuration }})"
+
+          # Redis queue backlog
+          - alert: RedisQueueBacklog
+            expr: redis_queue_messages{queue="notifications"} > 1000
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High queue backlog"
+              description: "Redis queue has {{ $value | humanize }} pending messages"
+
+          # MySQL down
+          - alert: MySQLDown
+            expr: up{job="mysql"} == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "MySQL database is down"
+              description: "MySQL database has been down for more than 2 minutes"
+
+          # Low booking rate
+          - alert: LowBookingRate
+            expr: (rate(booking_reserved_total[5m]) * 60) < 10
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Low booking rate"
+              description: "Booking rate is below 10 per minute (current: {{ $value | humanize }} per minute)"
+
+          # High payment failure rate
+          - alert: HighPaymentFailureRate
+            expr: (sum by (job) (increase(payment_capture_failed[5m])) / sum by (job) (increase(payment_capture_total[5m])) * 100) > 10
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High payment failure rate"
+              description: "Payment failure rate is above 10% (current: {{ $value | humanizePercentage }})"
+
+          # Prometheus storage near full
+          - alert: PrometheusStorageNearFull
+            expr: (prometheus_tsdb_data_blocks_total - prometheus_tsdb_data_blocks_served) / prometheus_tsdb_data_blocks_total > 0.8
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Prometheus storage near full"
+              description: "Prometheus storage is {{ $value | humanizePercentage }} full"
+
+          # Loki dropped logs
+          - alert: LokiDroppedLogs
+            expr: rate(loki_logs_dropped_total[5m]) > 0
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Loki dropping logs"
+              description: "Loki is dropping {{ $value }} logs per second"

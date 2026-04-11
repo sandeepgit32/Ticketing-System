@@ -23,8 +23,8 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 K8S_DIR="$REPO_ROOT/infra/k8s"
-SECRET_OUT="$K8S_DIR/secret.yaml"
-SECRET_TEMPLATE="$K8S_DIR/secret.example.yaml"
+SECRET_OUT="$K8S_DIR/config/secret.yaml"
+SECRET_TEMPLATE="$K8S_DIR/config/secret.example.yaml"
 AUTH_ENV="$REPO_ROOT/services/auth/.env"
 DB_ENV="$REPO_ROOT/services/database/.env"
 NOTIF_ENV="$REPO_ROOT/services/notification/.env"
@@ -215,9 +215,13 @@ apply_keda_manifests() {
     echo "KEDA CRDs already present; skipping KEDA controller install."
   fi
 
-  if [[ -d "$K8S_DIR/keda" ]]; then
-    kubectl apply -f "$K8S_DIR/keda/"
-  fi
+  # ScaledObjects now live beside each app that they scale.
+  for app in booking notification payment-mock; do
+    local scaledobject="$K8S_DIR/apps/$app/scaledobject.yaml"
+    if [[ -f "$scaledobject" ]]; then
+      kubectl apply -f "$scaledobject"
+    fi
+  done
 }
 
 build_images() {
@@ -237,12 +241,30 @@ build_images() {
 }
 
 apply_manifests() {
-  # Apply the core workload and service manifests in a safe order.
-  kubectl apply -f "$K8S_DIR/secret.yaml"
-  kubectl apply -f "$K8S_DIR/configmap.yaml"
-  kubectl apply -f "$K8S_DIR/services/"
-  kubectl apply -f "$K8S_DIR/deployments/"
-  kubectl apply -f "$K8S_DIR/statefulsets/"
+  # Apply the core workload manifests in a safe order.
+  # Secrets and ConfigMaps must exist before any Pod references them.
+  # Apply each file explicitly — never glob config/ so secret.example.yaml is never applied.
+  kubectl apply -f "$K8S_DIR/config/configmap.yaml"
+  kubectl apply -f "$K8S_DIR/config/secret.yaml"
+
+  # Databases: apply the Service before the StatefulSet so DNS resolves on first boot.
+  kubectl apply -f "$K8S_DIR/databases/mysql/service.yaml"
+  kubectl apply -f "$K8S_DIR/databases/mysql/statefulset.yaml"
+  kubectl apply -f "$K8S_DIR/databases/redis/"
+
+  # Application services: each app directory holds its service.yaml + deployment.yaml.
+  # ScaledObjects are intentionally skipped here; they require KEDA CRDs (see apply_keda_manifests).
+  for app in auth booking booking-status gateway notification payment-mock frontend; do
+    local app_dir="$K8S_DIR/apps/$app"
+    [[ -f "$app_dir/service.yaml"    ]] && kubectl apply -f "$app_dir/service.yaml"
+    [[ -f "$app_dir/deployment.yaml" ]] && kubectl apply -f "$app_dir/deployment.yaml"
+  done
+
+  # Observability: apply ConfigMaps before Deployments (alphabetical order within each dir
+  # ensures configmap.yaml is applied before deployment.yaml).
+  for component in prometheus loki tempo grafana; do
+    kubectl apply -f "$K8S_DIR/observability/$component/"
+  done
 }
 
 start_frontend_port_forward() {

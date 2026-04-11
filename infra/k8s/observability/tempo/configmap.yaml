@@ -1,0 +1,76 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-config
+  namespace: default
+data:
+  tempo-config.yaml: |
+    server:
+      http_listen_port: 3200
+      grpc_listen_port: 3201
+
+    distributor:
+      rate_limit_bytes: 10485760  # 10MB
+      log_received_traces: false
+
+    # OTLP receiver configuration
+    receivers:
+      # OTLP gRPC receiver
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+      # Jaeger receiver (optional, for compatibility)
+      jaeger:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:14250
+
+    # Ingester configuration
+    ingester:
+      max_block_duration: 5m
+
+    compactor:
+      compaction:
+        compaction_window: 1h
+        max_compaction_blocks: 9
+        block_retention: 168h  # 7 days
+        compacted_block_retention: 10m
+
+    # Storage configuration
+    storage:
+      trace:
+        backend: local
+        local:
+          path: /var/tempo/traces
+        block:
+          bloom_filter_false_positive_rate: .01
+        wal:
+          path: /var/tempo/wal
+        cache: memcache
+        memcache:
+          consistent_hash: true
+          max_idle_conns: 100
+          update_interval: 1m
+          servers:
+            - memcached:11211
+      metrics:
+        backend: local
+        local:
+          path: /var/tempo/metrics
+
+    metrics_generator:
+      registry:
+        external_labels:
+          cluster: minikube
+          environment: staging
+
+    # Rate limiting per tenant
+    rate_limit:
+      enabled: true
+      max_traces_per_user: 10000
+      max_bytes_per_trace: 1048576  # 1MB
+      max_spans_per_trace: 100000

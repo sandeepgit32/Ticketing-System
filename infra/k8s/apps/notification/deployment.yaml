@@ -21,6 +21,9 @@ spec:
                 name: ticketing-system-credentials
             - configMapRef:
                 name: ticketing-system-config
+          env:
+            - name: SERVICE_NAME
+              value: notification
           # Notification is a worker that polls Redis, not an HTTP server.
           # probe ensures container starts and stays alive rather than testing TCP socket.
           startupProbe:

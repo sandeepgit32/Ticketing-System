@@ -4,3 +4,16 @@ pydantic[email]==2.5.3
 PyJWT==2.8.0
 bcrypt==4.1.2
 mysql-connector-python==8.3.0
+
+# PLTG Stack - Observability & Monitoring
+# Prometheus metrics collection
+prometheus-client==0.19.0
+# OpenTelemetry for distributed tracing
+opentelemetry-api==1.21.0
+opentelemetry-sdk==1.21.0
+opentelemetry-exporter-otlp==0.42b0
+# Auto-instrumentation for FastAPI, HTTP, database
+opentelemetry-instrumentation-fastapi==0.42b0
+opentelemetry-instrumentation-requests==0.42b0
+opentelemetry-instrumentation-sqlalchemy==0.42b0
+opentelemetry-propagators-jaeger==1.21.0

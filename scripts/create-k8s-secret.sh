@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AUTH_ENV="$REPO_ROOT/services/auth/.env"
 DB_ENV="$REPO_ROOT/services/database/.env"
 NOTIF_ENV="$REPO_ROOT/services/notification/.env"
-OUT="$REPO_ROOT/infra/k8s/secret.yaml"
+OUT="$REPO_ROOT/infra/k8s/config/secret.yaml"
 
 # --- Validate .env files exist -----------------------------------------------
 missing=()
