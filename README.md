@@ -34,9 +34,10 @@ The system follows the block diagram architecture with the following components:
    - Built with FastAPI + MySQL
    - Protected routes (requires authentication)
 
-5. **Payment Service** (Port 9001)
-   - Mock payment provider for testing
-   - Webhook simulation
+5. **Payment Services** (Port 9001 externally, both run on :8000 internally)
+   - **Mock provider** (`payment-mock`) — zero-config local development, no credentials needed
+   - **Razorpay provider** (`payment-razorpay`) — real payment processing via Razorpay Orders API
+   - Both expose identical endpoints; switch by changing one env var (see [Switching Payment Providers](#switching-payment-providers))
    - Built with FastAPI
 
 6. **Notification Service**
@@ -311,7 +312,9 @@ ticketing-system/
 │   ├── booking-status/    # Status checking service
 │   ├── gateway/           # API Gateway
 │   ├── notification/      # Notification service
-│   ├── payment/mock/      # Mock payment provider
+│   ├── payment/
+│   │   ├── mock/          # Mock payment provider (local dev)
+│   │   └── razorpay/      # Razorpay payment provider (production)
 │   └── worker/            # Background worker
 ├── frontend/vue/          # Vue.js frontend (refactored)
 │   ├── src/
@@ -325,6 +328,48 @@ ticketing-system/
 ├── docker-compose.yml     # Docker services configuration
 └── README.md
 ```
+
+### Switching Payment Providers
+
+The gateway routes all payment traffic to a single configurable URL. Both providers expose identical endpoints on port 8000 internally.
+
+**Step 1 — Tell the gateway which provider to use** (`services/gateway/.env`):
+```env
+# Mock (local dev — no credentials needed):
+PAYMENT_SERVICE_URL=http://payment-mock:8000
+
+# Razorpay (real payments):
+PAYMENT_SERVICE_URL=http://payment-razorpay:8000
+```
+
+**Step 2 — Tell the booking service the same** (`services/booking/.env`):
+```env
+# Mock:
+PAYMENT_PROVIDER_URL=http://payment-mock:8000
+
+# Razorpay:
+PAYMENT_PROVIDER_URL=http://payment-razorpay:8000
+```
+
+**Step 3 (Razorpay only) — Add credentials** (`services/payment/razorpay/.env`):
+```env
+RAZORPAY_KEY_ID=rzp_test_your_key_id
+RAZORPAY_KEY_SECRET=your_key_secret
+RAZORPAY_WEBHOOK_SECRET=any_strong_string
+WEBHOOK_SECRET=must_match_booking_WEBHOOK_SECRET
+BOOKING_WEBHOOK_URL=http://booking:8000/payments/webhook
+REDIS_URL=redis://redis:6379/0
+```
+Get test credentials from the [Razorpay Dashboard](https://dashboard.razorpay.com/) → Settings → API Keys.
+
+**Step 4 — Restart**:
+```bash
+docker compose up --build gateway booking payment-mock payment-razorpay
+```
+
+The mock provider works out of the box with no credentials — `services/payment/mock/.env` is pre-configured for local development.
+
+---
 
 ### Direct Service Access (for debugging)
 
@@ -442,7 +487,6 @@ The system uses Redis for two types of queues:
 - [ ] Add rate limiting to API Gateway
 - [ ] Implement refresh tokens
 - [ ] Add booking expiration worker
-- [ ] Integrate real payment provider (Stripe, PayPal)
 - [ ] Add monitoring and metrics (Prometheus)
 - [ ] Implement distributed tracing
 - [ ] Add caching layer

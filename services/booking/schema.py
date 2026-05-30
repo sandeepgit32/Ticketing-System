@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -21,6 +21,6 @@ class PaymentCaptureRequest(BaseModel):
 
 class PaymentConfirmRequest(BaseModel):
     intent_id: str
-    razorpay_payment_id: str
-    razorpay_order_id: str
-    razorpay_signature: str
+    razorpay_payment_id: Optional[str] = None
+    razorpay_order_id: Optional[str] = None
+    razorpay_signature: Optional[str] = None

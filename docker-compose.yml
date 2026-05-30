@@ -44,6 +44,12 @@ services:
         condition: service_started
     env_file: ./services/booking/.env
 
+  # ---------------------------------------------------------------------------
+  # Payment services — only ONE should be targeted by the gateway at a time.
+  # Switch providers by setting PAYMENT_SERVICE_URL in services/gateway/.env:
+  #   Mock (local dev):  PAYMENT_SERVICE_URL=http://payment-mock:8000
+  #   Razorpay (real):   PAYMENT_SERVICE_URL=http://payment-razorpay:8000
+  # ---------------------------------------------------------------------------
   payment-mock:
     build: ./services/payment/mock
     depends_on:
@@ -56,7 +62,7 @@ services:
       - redis
     env_file: ./services/payment/razorpay/.env
     ports:
-      - "9001:9000"
+      - "9001:8000"
 
   notification:
     build: ./services/notification

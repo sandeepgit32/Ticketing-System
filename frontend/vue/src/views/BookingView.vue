@@ -323,8 +323,19 @@ const handlePayment = async () => {
   paymentError.value = ''
 
   try {
-    // Step 1 — create Razorpay order via booking service
+    // Step 1 — create payment intent via booking service
     const intent = await bookingStore.capturePayment(reservationId.value, totalPrice.value)
+
+    if (intent.key_id === 'mock') {
+      // Mock provider — skip Razorpay Checkout, confirm directly
+      await bookingStore.confirmPayment({ intent_id: intent.intent_id })
+      bookingId.value = intent.intent_id
+      step.value = 'confirmed'
+      processingPayment.value = false
+      return
+    }
+
+    // Razorpay provider
     if (!intent.razorpay_order_id || !intent.key_id) {
       throw new Error('Payment provider did not return order details.')
     }
