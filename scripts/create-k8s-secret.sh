@@ -13,6 +13,7 @@
 #     services/auth/.env
 #     services/database/.env
 #     services/notification/.env
+#     services/payment/razorpay/.env
 # =============================================================================
 set -euo pipefail
 
@@ -21,13 +22,15 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 AUTH_ENV="$REPO_ROOT/services/auth/.env"
 DB_ENV="$REPO_ROOT/services/database/.env"
 NOTIF_ENV="$REPO_ROOT/services/notification/.env"
+PAYMENT_ENV="$REPO_ROOT/services/payment/razorpay/.env"
 OUT="$REPO_ROOT/infra/k8s/secret.yaml"
 
 # --- Validate .env files exist -----------------------------------------------
 missing=()
-[[ -f "$AUTH_ENV" ]]  || missing+=("$AUTH_ENV")
-[[ -f "$DB_ENV" ]]    || missing+=("$DB_ENV")
-[[ -f "$NOTIF_ENV" ]] || missing+=("$NOTIF_ENV")
+[[ -f "$AUTH_ENV" ]]    || missing+=("$AUTH_ENV")
+[[ -f "$DB_ENV" ]]      || missing+=("$DB_ENV")
+[[ -f "$NOTIF_ENV" ]]   || missing+=("$NOTIF_ENV")
+[[ -f "$PAYMENT_ENV" ]] || missing+=("$PAYMENT_ENV")
 
 if [[ ${#missing[@]} -gt 0 ]]; then
   echo "ERROR: Missing .env files. Copy from .env.example and fill in values:"
@@ -60,6 +63,9 @@ SMTP_USER=$(get_env "$NOTIF_ENV" SMTP_USER)
 SMTP_PASSWORD=$(get_env "$NOTIF_ENV" SMTP_PASSWORD)
 DEFAULT_ADMIN_EMAIL=$(get_env "$AUTH_ENV" DEFAULT_ADMIN_EMAIL)
 DEFAULT_ADMIN_PASSWORD=$(get_env "$AUTH_ENV" DEFAULT_ADMIN_PASSWORD)
+RAZORPAY_KEY_ID=$(get_env "$PAYMENT_ENV" RAZORPAY_KEY_ID)
+RAZORPAY_KEY_SECRET=$(get_env "$PAYMENT_ENV" RAZORPAY_KEY_SECRET)
+RAZORPAY_WEBHOOK_SECRET=$(get_env "$PAYMENT_ENV" RAZORPAY_WEBHOOK_SECRET)
 
 # --- Write secret.yaml -------------------------------------------------------
 cat > "$OUT" <<EOF
@@ -77,6 +83,9 @@ stringData:
   SMTP_PASSWORD: "${SMTP_PASSWORD}"
   DEFAULT_ADMIN_EMAIL: "${DEFAULT_ADMIN_EMAIL}"
   DEFAULT_ADMIN_PASSWORD: "${DEFAULT_ADMIN_PASSWORD}"
+  RAZORPAY_KEY_ID: "${RAZORPAY_KEY_ID}"
+  RAZORPAY_KEY_SECRET: "${RAZORPAY_KEY_SECRET}"
+  RAZORPAY_WEBHOOK_SECRET: "${RAZORPAY_WEBHOOK_SECRET}"
 EOF
 
 echo "✅  Generated $OUT"

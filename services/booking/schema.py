@@ -17,3 +17,10 @@ class CreateEventRequest(BaseModel):
 class PaymentCaptureRequest(BaseModel):
     intent_id: str
     amount: float
+
+
+class PaymentConfirmRequest(BaseModel):
+    intent_id: str
+    razorpay_payment_id: str
+    razorpay_order_id: str
+    razorpay_signature: str

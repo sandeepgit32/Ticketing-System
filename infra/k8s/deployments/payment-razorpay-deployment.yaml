@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ticketing-system-payment-razorpay
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ticketing-system-payment-razorpay
+  template:
+    metadata:
+      labels:
+        app: ticketing-system-payment-razorpay
+    spec:
+      containers:
+        - name: payment-razorpay
+          image: payment-razorpay:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9000
+          envFrom:
+            - configMapRef:
+                name: ticketing-system-config
+          env:
+            - name: RAZORPAY_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: ticketing-system-credentials
+                  key: RAZORPAY_KEY_ID
+            - name: RAZORPAY_KEY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ticketing-system-credentials
+                  key: RAZORPAY_KEY_SECRET
+            - name: RAZORPAY_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: ticketing-system-credentials
+                  key: RAZORPAY_WEBHOOK_SECRET
+          readinessProbe:
+            tcpSocket:
+              port: 9000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 9000
+            initialDelaySeconds: 10
+            periodSeconds: 20

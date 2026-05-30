@@ -79,9 +79,28 @@ spec:
             - name: BOOKING_STATUS_URL
               value: "http://{{ include "ticketing-system.fullname" $. }}-booking-status:8000"
             - name: PAYMENT_URL
-              value: "http://{{ include "ticketing-system.fullname" $. }}-payment-mock:8000"
+              value: "http://{{ include "ticketing-system.fullname" $. }}-payment-razorpay:9000"
             - name: NOTIFICATION_URL
               value: "http://{{ include "ticketing-system.fullname" $. }}-notification:8000"
+          {{- end }}
+          {{- if eq $name "paymentRazorpay" }}
+            - name: RAZORPAY_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: razorpay-key-id
+            - name: RAZORPAY_KEY_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: razorpay-key-secret
+            - name: RAZORPAY_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "ticketing-system.fullname" $. }}-credentials
+                  key: razorpay-webhook-secret
+            - name: BOOKING_WEBHOOK_URL
+              value: "http://{{ include "ticketing-system.fullname" $. }}-booking:8000/payments/webhook"
           {{- end }}
           {{- if eq $name "notification" }}
             - name: SMTP_HOST

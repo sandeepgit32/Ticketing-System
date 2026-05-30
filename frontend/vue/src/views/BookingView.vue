@@ -146,22 +146,6 @@
                 <span>Total Amount:</span>
                 <strong>₹{{ totalPrice }}</strong>
               </div>
-            </div>
-
-            <div class="payment-methods">
-              <h4>Select Payment Method:</h4>
-              <div class="payment-options">
-                <label class="payment-option">
-                  <input type="radio" v-model="paymentMethod" value="card" />
-                  <span>💳 Credit/Debit Card</span>
-                </label>
-                <label class="payment-option">
-                  <input type="radio" v-model="paymentMethod" value="paypal" />
-                  <span>🅿️ PayPal</span>
-                </label>
-              </div>
-            </div>
-
             <div v-if="paymentError" class="error-alert">
               {{ paymentError }}
             </div>
@@ -169,15 +153,13 @@
 
           <template #footer>
             <div class="payment-actions">
-              <BaseButton variant="secondary" @click="cancelReservation">
-                Cancel
-              </BaseButton>
+              <BaseButton variant="ghost" @click="step = 'select'">Cancel</BaseButton>
               <BaseButton
-                variant="success"
+                variant="primary"
                 :loading="processingPayment"
                 @click="handlePayment"
               >
-                Pay Now
+                Pay ₹{{ totalPrice }} Now
               </BaseButton>
             </div>
           </template>
@@ -243,7 +225,6 @@ const authStore = useAuthStore()
 
 const step = ref('select') // 'select', 'payment', 'confirmed'
 const selectedSeats = ref([])
-const paymentMethod = ref('card')
 const processingPayment = ref(false)
 const paymentError = ref('')
 const closeError = ref('')
@@ -341,15 +322,72 @@ const handlePayment = async () => {
   paymentError.value = ''
 
   try {
-    const result = await bookingStore.capturePayment(reservationId.value, totalPrice.value)
+    // Step 1 — create Razorpay order via booking service
+    const intent = await bookingStore.capturePayment(reservationId.value, totalPrice.value)
+    if (!intent.razorpay_order_id || !intent.key_id) {
+      throw new Error('Payment provider did not return order details.')
+    }
 
-    bookingId.value = result.intent_id || reservationId.value
-    step.value = 'confirmed'
-  } catch (error) {
-    paymentError.value = bookingStore.error || 'Payment failed. Please try again.'
-  } finally {
+    // Step 2 — load Razorpay Checkout JS (once)
+    await loadRazorpayScript()
+
+    // Step 3 — open Razorpay Checkout; confirmation is handled in the callback
+    await openRazorpayCheckout(intent)
+  } catch (err) {
+    paymentError.value = bookingStore.error || err.message || 'Payment failed. Please try again.'
     processingPayment.value = false
   }
+}
+
+function loadRazorpayScript() {
+  return new Promise((resolve, reject) => {
+    if (window.Razorpay) { resolve(); return }
+    const script = document.createElement('script')
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js'
+    script.onload = resolve
+    script.onerror = () => reject(new Error('Failed to load Razorpay Checkout script.'))
+    document.head.appendChild(script)
+  })
+}
+
+function openRazorpayCheckout(intent) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      key: intent.key_id,
+      amount: Math.round(intent.amount * 100), // paise
+      currency: 'INR',
+      name: 'BookEventTicket',
+      description: 'Event ticket booking',
+      order_id: intent.razorpay_order_id,
+      handler: async (response) => {
+        try {
+          await bookingStore.confirmPayment({
+            intent_id: intent.intent_id,
+            razorpay_payment_id: response.razorpay_payment_id,
+            razorpay_order_id: response.razorpay_order_id,
+            razorpay_signature: response.razorpay_signature
+          })
+          bookingId.value = intent.intent_id
+          step.value = 'confirmed'
+          resolve()
+        } catch (err) {
+          paymentError.value = bookingStore.error || 'Payment confirmation failed.'
+          reject(err)
+        } finally {
+          processingPayment.value = false
+        }
+      },
+      theme: { color: '#3399cc' }
+    }
+
+    const rzp = new window.Razorpay(options)
+    rzp.on('payment.failed', (response) => {
+      paymentError.value = response.error?.description || 'Payment failed.'
+      processingPayment.value = false
+      reject(new Error(paymentError.value))
+    })
+    rzp.open()
+  })
 }
 
 const cancelReservation = () => {

@@ -59,6 +59,25 @@ export const useBookingStore = defineStore('booking', () => {
     }
   }
 
+  const confirmPayment = async ({ intent_id, razorpay_payment_id, razorpay_order_id, razorpay_signature }) => {
+    loading.value = true
+    error.value = null
+    try {
+      const response = await bookingAPI.confirmPayment({
+        intent_id,
+        razorpay_payment_id,
+        razorpay_order_id,
+        razorpay_signature
+      })
+      return response.data
+    } catch (err) {
+      error.value = err.response?.data?.detail || 'Payment confirmation failed'
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
   const loadUserBookings = async (limit = 50, offset = 0) => {
     loading.value = true
     error.value = null
@@ -87,6 +106,7 @@ export const useBookingStore = defineStore('booking', () => {
     loadEvent,
     reserveSeats,
     capturePayment,
+    confirmPayment,
     loadUserBookings,
     clearReservation
   }

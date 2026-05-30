@@ -1,0 +1,15 @@
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: ticketing-system-payment-razorpay-scaledobject
+spec:
+  scaleTargetRef:
+    name: ticketing-system-payment-razorpay
+  minReplicaCount: 1
+  maxReplicaCount: 20
+  triggers:
+    - type: redis
+      metadata:
+        address: ticketing-system-redis:6379
+        listName: queue:payments
+        listLength: "5"

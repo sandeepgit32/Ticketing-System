@@ -12,7 +12,12 @@ import yaml
 from db_utils import execute_query, fetch_all, fetch_one, require_db_pool
 from fastapi import FastAPI, Header, HTTPException, Request
 from mysql.connector import pooling
-from schema import CreateEventRequest, PaymentCaptureRequest, ReserveRequest
+from schema import (
+    CreateEventRequest,
+    PaymentCaptureRequest,
+    PaymentConfirmRequest,
+    ReserveRequest,
+)
 
 
 def required_env(key: str, cast=str):
@@ -1240,54 +1245,41 @@ async def payments_capture(
     x_user_email: Optional[str] = Header(None),
     x_user_role: Optional[str] = Header(None),
 ):
-    """Capture a payment by forwarding the request to the configured payment provider.
+    """Create a payment intent (Razorpay order) via the configured payment provider.
 
-    This implementation first creates a payment intent and then confirms it so
-    the mock payment provider emits its webhook to the booking service.  The
-    endpoint reads ``PAYMENT_PROVIDER_URL`` from the environment, proxies the
-    request body to ``POST {PAYMENT_PROVIDER_URL}/payments/intents``, then
-    calls ``GET {PAYMENT_PROVIDER_URL}/payments/intents/{intent_id}/confirm``.
-    The intent response is returned to the caller. Any HTTP error from either
-    upstream request is re-raised as an ``HTTPException`` with the same status
-    code.
+    Forwards the request body to ``POST {PAYMENT_PROVIDER_URL}/payments/intents``
+    and returns the provider's response directly.  For the Razorpay provider the
+    response includes ``razorpay_order_id`` and ``key_id`` which the frontend
+    needs to open Razorpay Checkout.
+
+    After the customer completes payment on Razorpay Checkout the frontend must
+    call ``POST /payments/confirm`` with the three values Razorpay delivers to
+    the checkout handler.
 
     Args:
-        body: Arbitrary JSON payload forwarded to the payment provider.  At
-            minimum the provider expects an ``intent_id`` (a reservation UUID)
-            and an ``amount`` field, for example::
-
-                {
-                    "intent_id": "a3f1c2d4-...",
-                    "amount": 5000
-                }
-
-        idempotency_key: Optional ``Idempotency-Key`` header value forwarded
-            unchanged to the payment provider so that retried requests are not
-            double-charged.  When omitted, no idempotency header is sent.
+        body: Must contain ``intent_id`` (the reservation UUID) and ``amount``
+            (in INR).
+        idempotency_key: Forwarded to the payment provider to prevent duplicate
+            orders on retries.
         x_user_email: Caller identity forwarded by the gateway.
-        x_user_role: Caller role forwarded by the gateway; admins are blocked.
+        x_user_role: Caller role; admins are blocked.
 
     Returns:
-        The JSON body returned by the payment provider on success, for example::
+        The JSON body from the payment provider, e.g.::
 
             {
-                "intent_id": "a3f1c2d4-...",
-                "status": "pending",
-                "amount": 5000
+                "intent_id": "...",
+                "razorpay_order_id": "order_...",
+                "status": "requires_confirmation",
+                "amount": 4999,
+                "key_id": "rzp_test_..."
             }
 
     Raises:
-        HTTPException: Propagates the provider's HTTP status code (>= 400) and
-            response body verbatim when the upstream call fails.  Common codes:
-
-            * ``402`` - insufficient funds / card declined.
-            * ``409`` - duplicate intent (idempotency collision).
-            * ``503`` - payment provider temporarily unavailable.
+        HTTPException: Propagates HTTP errors from the payment provider.
     """
     _require_customer_role(x_user_email, x_user_role)
 
-    # Create the intent first, then confirm it so the payment provider
-    # dispatches the webhook back to this service.
     payment_provider = required_env("PAYMENT_PROVIDER_URL")
     async with httpx.AsyncClient() as client:
         headers = {}
@@ -1305,24 +1297,56 @@ async def payments_capture(
                 detail=intent_response.text,
             )
 
-        intent = intent_response.json()
-        intent_id = intent.get("intent_id")
-        if not intent_id:
-            raise HTTPException(
-                status_code=502, detail="payment provider returned no intent_id"
-            )
+    return intent_response.json()
 
-        confirm_response = await client.get(
-            f"{payment_provider}/payments/intents/{intent_id}/confirm",
+
+@app.post("/payments/confirm")
+async def payments_confirm(
+    body: PaymentConfirmRequest,
+    x_user_email: Optional[str] = Header(None),
+    x_user_role: Optional[str] = Header(None),
+):
+    """Forward the Razorpay frontend confirmation to the payment service.
+
+    Called by the frontend after the customer completes payment on Razorpay
+    Checkout.  Proxies the three Razorpay fields to
+    ``POST {PAYMENT_PROVIDER_URL}/payments/intents/{intent_id}/confirm`` which
+    verifies the signature and asynchronously delivers the outcome webhook back
+    to this service's ``POST /payments/webhook`` endpoint.
+
+    Args:
+        body: Must contain ``intent_id``, ``razorpay_payment_id``,
+            ``razorpay_order_id``, and ``razorpay_signature``.
+        x_user_email: Caller identity forwarded by the gateway.
+        x_user_role: Caller role; admins are blocked.
+
+    Returns:
+        ``{"ok": True, "scheduled": True}``
+
+    Raises:
+        HTTPException: Propagates HTTP errors from the payment provider.
+    """
+    _require_customer_role(x_user_email, x_user_role)
+
+    payment_provider = required_env("PAYMENT_PROVIDER_URL")
+    async with httpx.AsyncClient() as client:
+        confirm_response = await client.post(
+            f"{payment_provider}/payments/intents/{body.intent_id}/confirm",
+            json={
+                "razorpay_payment_id": body.razorpay_payment_id,
+                "razorpay_order_id": body.razorpay_order_id,
+                "razorpay_signature": body.razorpay_signature,
+            },
             timeout=15,
         )
 
     if confirm_response.status_code >= 400:
         raise HTTPException(
-            status_code=confirm_response.status_code, detail=confirm_response.text
+            status_code=confirm_response.status_code,
+            detail=confirm_response.text,
         )
 
-    return intent
+    return confirm_response.json()
 
 
 @app.post("/payments/webhook")

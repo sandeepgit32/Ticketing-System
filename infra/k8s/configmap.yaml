@@ -26,11 +26,18 @@ data:
   AUTH_SERVICE_URL: "http://ticketing-system-auth:8000"
   BOOKING_SERVICE_URL: "http://ticketing-system-booking:8000"
   BOOKING_STATUS_SERVICE_URL: "http://ticketing-system-booking-status:8000"
-  PAYMENT_SERVICE_URL: "http://ticketing-system-payment-mock:8000"
+  PAYMENT_SERVICE_URL: "http://ticketing-system-payment-razorpay:9000"
   NOTIFICATION_URL: "http://ticketing-system-notification:9000"
   FRONTEND_BACKEND_URL: "http://ticketing-system-gateway:8000"
   FRONTEND_ORIGINS: "http://localhost:5173,http://localhost:5174,http://127.0.0.1:30090"
 
+  # Payment provider URL used by the booking service to create/confirm payment intents.
+  # Switch to http://ticketing-system-payment-mock:8000 to use the mock provider.
+  PAYMENT_PROVIDER_URL: "http://ticketing-system-payment-razorpay:9000"
+
   # Payment webhook config
   BOOKING_WEBHOOK_URL: "http://ticketing-system-booking:8000/payments/webhook"
-  WEBHOOK_SECRET: "secret"
+  # WEBHOOK_SECRET is a shared HMAC secret between the payment service and the booking
+  # service. Override this with a strong random value via your secrets pipeline.
+  # Do NOT leave as CHANGEME in production.
+  WEBHOOK_SECRET: "CHANGEME"

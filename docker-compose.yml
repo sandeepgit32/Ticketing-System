@@ -50,6 +50,14 @@ services:
       - redis
     env_file: ./services/payment/mock/.env
 
+  payment-razorpay:
+    build: ./services/payment/razorpay
+    depends_on:
+      - redis
+    env_file: ./services/payment/razorpay/.env
+    ports:
+      - "9001:9000"
+
   notification:
     build: ./services/notification
     depends_on:
@@ -63,6 +71,7 @@ services:
       - booking
       - booking-status
       - payment-mock
+      - payment-razorpay
     env_file: ./services/gateway/.env
     ports:
       - "8000:8000"

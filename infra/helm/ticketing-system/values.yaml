@@ -46,6 +46,11 @@ services:
     image: payment-mock:latest
     port: 8000
     replicas: 1
+  paymentRazorpay:
+    enabled: true
+    image: payment-razorpay:latest
+    port: 9000
+    replicas: 1
   notification:
     enabled: true
     image: notification:latest
@@ -77,6 +82,9 @@ keda:
     paymentMock:
       listName: queue:payments
       listLength: "5"
+    paymentRazorpay:
+      listName: queue:payments
+      listLength: "5"
 
 secrets:
   jwtSecret: "CHANGEME"
@@ -88,6 +96,9 @@ secrets:
   smtpPassword: "CHANGEME"
   defaultAdminEmail: "admin@example.com"
   defaultAdminPassword: "CHANGEME"
+  razorpayKeyId: "CHANGEME"
+  razorpayKeySecret: "CHANGEME"
+  razorpayWebhookSecret: "CHANGEME"
 
 resources:
   requests:
