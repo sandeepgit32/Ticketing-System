@@ -320,14 +320,14 @@ async def register(req: RegisterRequest):
         password_hash = hash_password(req.password)
 
         cursor.execute(
-            "INSERT INTO users (user_id, email, password_hash, full_name, user_role) VALUES (%s, %s, %s, %s, %s)",
-            (user_id, req.email, password_hash, req.full_name, "User"),
+            "INSERT INTO users (user_id, email, password_hash, full_name, phone, user_role) VALUES (%s, %s, %s, %s, %s, %s)",
+            (user_id, req.email, password_hash, req.full_name, req.phone, "User"),
         )
         conn.commit()
 
         # Fetch the created user
         cursor.execute(
-            "SELECT user_id, email, full_name, user_role, created_at FROM users WHERE user_id = %s",
+            "SELECT user_id, email, full_name, phone, user_role, created_at FROM users WHERE user_id = %s",
             (user_id,),
         )
         user = cursor.fetchone()
@@ -337,6 +337,7 @@ async def register(req: RegisterRequest):
             email=user["email"],
             full_name=user["full_name"],
             role=user.get("user_role", "User"),
+            phone=user.get("phone"),
             created_at=user["created_at"].isoformat(),
         )
     finally:
@@ -365,7 +366,7 @@ async def login(req: LoginRequest):
     try:
         # Find user
         cursor.execute(
-            "SELECT user_id, email, password_hash, full_name, user_role FROM users WHERE email = %s",
+            "SELECT user_id, email, password_hash, full_name, phone, user_role FROM users WHERE email = %s",
             (req.email,),
         )
         user = cursor.fetchone()
@@ -384,6 +385,7 @@ async def login(req: LoginRequest):
                 "email": user["email"],
                 "full_name": user["full_name"],
                 "role": user.get("user_role", "User"),
+                "phone": user.get("phone"),
             },
             expires_delta=access_token_expires_at,
         )
@@ -429,6 +431,7 @@ async def verify_token(current_user: dict = Depends(get_current_user)):
         "email": current_user.get("email"),
         "full_name": current_user.get("full_name"),
         "role": current_user.get("role", "User"),
+        "phone": current_user.get("phone"),
     }
 
 

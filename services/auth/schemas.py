@@ -1,10 +1,12 @@
 from pydantic import BaseModel, EmailStr
+from typing import Optional
 
 
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str
     full_name: str
+    phone: Optional[str] = None
 
 
 class LoginRequest(BaseModel):
@@ -23,4 +25,5 @@ class UserResponse(BaseModel):
     email: str
     full_name: str
     role: str
+    phone: Optional[str] = None
     created_at: str

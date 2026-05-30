@@ -23,6 +23,15 @@
         />
 
         <BaseInput
+          v-if="!isLogin"
+          v-model="formData.phone"
+          type="tel"
+          label="Mobile Number"
+          placeholder="+91XXXXXXXXXX"
+          :error="errors.phone"
+        />
+
+        <BaseInput
           v-model="formData.email"
           type="email"
           label="Email Address"
@@ -79,12 +88,14 @@ const isLogin = ref(true)
 const formData = reactive({
   email: '',
   password: '',
-  full_name: ''
+  full_name: '',
+  phone: ''
 })
 const errors = reactive({
   email: '',
   password: '',
-  full_name: ''
+  full_name: '',
+  phone: ''
 })
 
 const toggleMode = () => {
@@ -134,7 +145,8 @@ const handleSubmit = async () => {
       await authStore.register({
         email: formData.email,
         password: formData.password,
-        full_name: formData.full_name
+        full_name: formData.full_name,
+        phone: formData.phone || undefined
       })
     }
     router.push('/events')

@@ -335,7 +335,9 @@ const handlePayment = async () => {
     // Step 3 — open Razorpay Checkout; confirmation is handled in the callback
     await openRazorpayCheckout(intent)
   } catch (err) {
-    paymentError.value = bookingStore.error || err.message || 'Payment failed. Please try again.'
+    if (err.message !== 'cancelled') {
+      paymentError.value = bookingStore.error || err.message || 'Payment failed. Please try again.'
+    }
     processingPayment.value = false
   }
 }
@@ -360,6 +362,11 @@ function openRazorpayCheckout(intent) {
       name: 'BookEventTicket',
       description: 'Event ticket booking',
       order_id: intent.razorpay_order_id,
+      prefill: {
+        name: authStore.user?.full_name || '',
+        email: authStore.user?.email || '',
+        contact: authStore.user?.phone || ''
+      },
       handler: async (response) => {
         try {
           await bookingStore.confirmPayment({
@@ -386,6 +393,10 @@ function openRazorpayCheckout(intent) {
       paymentError.value = response.error?.description || 'Payment failed.'
       processingPayment.value = false
       reject(new Error(paymentError.value))
+    })
+    rzp.on('modal.closed', () => {
+      processingPayment.value = false
+      reject(new Error('cancelled'))
     })
     rzp.open()
   })

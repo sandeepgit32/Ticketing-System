@@ -29,7 +29,8 @@ export const useAuthStore = defineStore('auth', () => {
       storeUser({
         email: verifyResponse.data?.email || credentials.email,
         full_name: verifyResponse.data?.full_name || '',
-        role: verifyResponse.data?.role || 'User'
+        role: verifyResponse.data?.role || 'User',
+        phone: verifyResponse.data?.phone || ''
       })
       
       return true
@@ -70,7 +71,8 @@ export const useAuthStore = defineStore('auth', () => {
       storeUser({
         email: response.data?.email || user.value?.email || '',
         full_name: response.data?.full_name || user.value?.full_name || '',
-        role: response.data?.role || user.value?.role || 'User'
+        role: response.data?.role || user.value?.role || 'User',
+        phone: response.data?.phone || user.value?.phone || ''
       })
       return true
     } catch (err) {
