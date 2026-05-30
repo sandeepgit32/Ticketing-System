@@ -146,6 +146,7 @@
                 <span>Total Amount:</span>
                 <strong>₹{{ totalPrice }}</strong>
               </div>
+            </div>
             <div v-if="paymentError" class="error-alert">
               {{ paymentError }}
             </div>
