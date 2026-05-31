@@ -2,6 +2,7 @@ apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: ticketing-system-payment-razorpay-scaledobject
+  namespace: app
 spec:
   scaleTargetRef:
     name: ticketing-system-payment-razorpay

@@ -89,6 +89,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: ticketing-system-credentials
+  namespace: app
 stringData:
   JWT_SECRET_KEY: "$jwt_secret"
   MYSQL_ROOT_PASSWORD: "$mysql_root_password"
@@ -200,6 +201,16 @@ use_existing_repo_secret() {
   echo "Using existing $SECRET_OUT"
 }
 
+apply_observability_manifests() {
+  # Deploy the observability stack (Prometheus, Loki, Grafana, Promtail) into the monitoring namespace.
+  if [[ -d "$K8S_DIR/observability" ]]; then
+    kubectl apply -f "$K8S_DIR/observability/"
+    echo "Observability stack applied. Grafana will be available at http://$(minikube ip):32000 (admin/admin)"
+  else
+    echo "WARNING: $K8S_DIR/observability/ not found; skipping."
+  fi
+}
+
 apply_keda_manifests() {
   # KEDA is optional; install CRDs/controller first (if needed) before applying ScaledObjects.
   local KEDA_VERSION=${KEDA_VERSION:-2.10.0}
@@ -238,6 +249,7 @@ build_images() {
 
 apply_manifests() {
   # Apply the core workload and service manifests in a safe order.
+  kubectl apply -f "$K8S_DIR/namespace.yaml"
   kubectl apply -f "$K8S_DIR/secret.yaml"
   kubectl apply -f "$K8S_DIR/configmap.yaml"
   kubectl apply -f "$K8S_DIR/services/"
@@ -251,7 +263,7 @@ start_frontend_port_forward() {
   local service_port=${2:-5173}
 
   echo "Starting frontend port-forward on http://127.0.0.1:${local_port} ..."
-  kubectl port-forward svc/ticketing-system-frontend "${local_port}:${service_port}" >/tmp/ticketing-frontend-port-forward.log 2>&1 &
+  kubectl port-forward -n app svc/ticketing-system-frontend "${local_port}:${service_port}" >/tmp/ticketing-frontend-port-forward.log 2>&1 &
   FRONTEND_PORT_FORWARD_PID=$!
 
   trap cleanup EXIT INT TERM
@@ -327,6 +339,14 @@ main() {
     apply_keda_manifests
   fi
 
+  # Observability stack is optional but recommended for monitoring.
+  local apply_obs_choice
+  apply_obs_choice=$(prompt "Apply observability stack (Prometheus, Loki, Grafana)? (y/N)" "N")
+  apply_obs_choice=$(trim "$apply_obs_choice")
+  if [[ "$apply_obs_choice" =~ ^[Yy]$ ]]; then
+    apply_observability_manifests
+  fi
+
   # Port-forwarding is optional because some users may prefer to use the NodePort or skip the frontend.
   local port_forward_choice
   port_forward_choice=$(prompt "Start frontend port-forward automatically? (Y/n)" "Y")
@@ -340,7 +360,7 @@ main() {
   # Give the user the final connection hint when the script finishes.
   echo ""
   echo "Ticketing system deployed."
-  echo "If you did not enable automatic port-forwarding, run: kubectl port-forward svc/ticketing-system-frontend 30090:5173"
+  echo "If you did not enable automatic port-forwarding, run: kubectl port-forward -n app svc/ticketing-system-frontend 30090:5173"
   echo "Then open: http://127.0.0.1:30090"
 }
 

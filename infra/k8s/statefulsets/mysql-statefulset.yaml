@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: ticketing-system-mysql
+  namespace: app
 spec:
   serviceName: ticketing-system-mysql
   replicas: 1

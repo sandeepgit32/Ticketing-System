@@ -73,6 +73,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: ticketing-system-credentials
+  namespace: app
 stringData:
   JWT_SECRET_KEY: "${JWT_SECRET_KEY}"
   MYSQL_ROOT_PASSWORD: "${MYSQL_ROOT_PASSWORD}"
