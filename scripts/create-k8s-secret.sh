@@ -92,4 +92,5 @@ EOF
 echo "✅  Generated $OUT"
 echo ""
 echo "Apply to your cluster with:"
+echo "  kubectl apply -f infra/k8s/namespace.yaml"
 echo "  kubectl apply -f infra/k8s/secret.yaml"

@@ -28,7 +28,7 @@ SECRET_TEMPLATE="$K8S_DIR/secret.example.yaml"
 AUTH_ENV="$REPO_ROOT/services/auth/.env"
 DB_ENV="$REPO_ROOT/services/database/.env"
 NOTIF_ENV="$REPO_ROOT/services/notification/.env"
-PAYMENT_ENV="$REPO_ROOT/services/payment/mock/.env"
+PAYMENT_ENV="$REPO_ROOT/services/payment/razorpay/.env"
 FRONTEND_PORT_FORWARD_PID=""
 
 require_cmd() {
@@ -70,6 +70,62 @@ load_env_file() {
   set +a
 }
 
+normalize_secret_namespace() {
+  # Keep reused secret manifests aligned with the app namespace migration.
+  if grep -Eq '^[[:space:]]*namespace:' "$SECRET_OUT"; then
+    sed -i 's/^[[:space:]]*namespace:.*/  namespace: app/' "$SECRET_OUT"
+    return
+  fi
+
+  awk '
+    BEGIN { inserted = 0 }
+    /^metadata:$/ && inserted == 0 {
+      print
+      print "  namespace: app"
+      inserted = 1
+      next
+    }
+    { print }
+    END {
+      if (inserted == 0) {
+        exit 1
+      }
+    }
+  ' "$SECRET_OUT" > "${SECRET_OUT}.tmp"
+  mv "${SECRET_OUT}.tmp" "$SECRET_OUT"
+}
+
+validate_secret_manifest() {
+  # Fail early if a reused manifest does not match the keys expected by the deployments.
+  local required_keys=(
+    JWT_SECRET_KEY
+    MYSQL_ROOT_PASSWORD
+    MYSQL_PASSWORD
+    SMTP_HOST
+    SMTP_PORT
+    SMTP_USER
+    SMTP_PASSWORD
+    DEFAULT_ADMIN_EMAIL
+    DEFAULT_ADMIN_PASSWORD
+    RAZORPAY_KEY_ID
+    RAZORPAY_KEY_SECRET
+    RAZORPAY_WEBHOOK_SECRET
+  )
+  local key
+  local missing=()
+
+  for key in "${required_keys[@]}"; do
+    if ! grep -Eq "^[[:space:]]*${key}:" "$SECRET_OUT"; then
+      missing+=("$key")
+    fi
+  done
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "ERROR: $SECRET_OUT is missing required keys: ${missing[*]}" >&2
+    exit 1
+  fi
+}
+
 write_secret_from_values() {
   # Write the Kubernetes Secret manifest using the provided values.
   local jwt_secret=$1
@@ -81,8 +137,9 @@ write_secret_from_values() {
   local smtp_password=$7
   local default_admin_email=$8
   local default_admin_password=$9
-  local webhook_secret=${10}
-  local booking_webhook_url=${11}
+  local razorpay_key_id=${10}
+  local razorpay_key_secret=${11}
+  local razorpay_webhook_secret=${12}
 
   cat > "$SECRET_OUT" <<EOF
 apiVersion: v1
@@ -100,15 +157,16 @@ stringData:
   SMTP_PASSWORD: "$smtp_password"
   DEFAULT_ADMIN_EMAIL: "$default_admin_email"
   DEFAULT_ADMIN_PASSWORD: "$default_admin_password"
-  WEBHOOK_SECRET: "$webhook_secret"
-  BOOKING_WEBHOOK_URL: "$booking_webhook_url"
+  RAZORPAY_KEY_ID: "$razorpay_key_id"
+  RAZORPAY_KEY_SECRET: "$razorpay_key_secret"
+  RAZORPAY_WEBHOOK_SECRET: "$razorpay_webhook_secret"
 EOF
 }
 
 write_secret_manually() {
   # Ask the user for each secret value explicitly.
   echo "Enter secret values one by one."
-  local jwt_secret mysql_root_password mysql_password smtp_host smtp_port smtp_user smtp_password default_admin_email default_admin_password
+  local jwt_secret mysql_root_password mysql_password smtp_host smtp_port smtp_user smtp_password default_admin_email default_admin_password razorpay_key_id razorpay_key_secret razorpay_webhook_secret
 
   jwt_secret=$(prompt "JWT secret")
   mysql_root_password=$(prompt "MySQL root password")
@@ -119,8 +177,9 @@ write_secret_manually() {
   smtp_password=$(prompt "SMTP password")
   default_admin_email=$(prompt "Default admin email" "admin@example.com")
   default_admin_password=$(prompt "Default admin password")
-  webhook_secret=$(prompt "Payment webhook secret")
-  booking_webhook_url=$(prompt "Booking webhook URL" "http://ticketing-system-booking:8000/payments/webhook")
+  razorpay_key_id=$(prompt "Razorpay key ID")
+  razorpay_key_secret=$(prompt "Razorpay key secret")
+  razorpay_webhook_secret=$(prompt "Razorpay webhook secret")
 
   write_secret_from_values \
     "$(trim "$jwt_secret")" \
@@ -132,8 +191,9 @@ write_secret_manually() {
     "$(trim "$smtp_password")" \
     "$(trim "$default_admin_email")" \
     "$(trim "$default_admin_password")" \
-    "$(trim "$webhook_secret")" \
-    "$(trim "$booking_webhook_url")"
+    "$(trim "$razorpay_key_id")" \
+    "$(trim "$razorpay_key_secret")" \
+    "$(trim "$razorpay_webhook_secret")"
 }
 
 write_secret_from_env_files() {
@@ -162,8 +222,9 @@ write_secret_from_env_files() {
   : "${SMTP_PASSWORD:?Missing SMTP_PASSWORD in services/notification/.env}"
   : "${DEFAULT_ADMIN_EMAIL:?Missing DEFAULT_ADMIN_EMAIL in services/auth/.env}"
   : "${DEFAULT_ADMIN_PASSWORD:?Missing DEFAULT_ADMIN_PASSWORD in services/auth/.env}"
-  : "${WEBHOOK_SECRET:?Missing WEBHOOK_SECRET in services/payment/mock/.env}"
-  : "${BOOKING_WEBHOOK_URL:?Missing BOOKING_WEBHOOK_URL in services/payment/mock/.env}"
+  : "${RAZORPAY_KEY_ID:?Missing RAZORPAY_KEY_ID in services/payment/razorpay/.env}"
+  : "${RAZORPAY_KEY_SECRET:?Missing RAZORPAY_KEY_SECRET in services/payment/razorpay/.env}"
+  : "${RAZORPAY_WEBHOOK_SECRET:?Missing RAZORPAY_WEBHOOK_SECRET in services/payment/razorpay/.env}"
 
   write_secret_from_values \
     "$JWT_SECRET_KEY" \
@@ -175,8 +236,9 @@ write_secret_from_env_files() {
     "$SMTP_PASSWORD" \
     "$DEFAULT_ADMIN_EMAIL" \
     "$DEFAULT_ADMIN_PASSWORD" \
-    "$WEBHOOK_SECRET" \
-    "$BOOKING_WEBHOOK_URL"
+    "$RAZORPAY_KEY_ID" \
+    "$RAZORPAY_KEY_SECRET" \
+    "$RAZORPAY_WEBHOOK_SECRET"
 }
 
 use_existing_secret_file() {
@@ -243,12 +305,22 @@ build_images() {
   docker build -t gateway:latest "$REPO_ROOT/services/gateway"
   docker build -t notification:latest "$REPO_ROOT/services/notification"
   docker build -t payment-mock:latest "$REPO_ROOT/services/payment/mock"
+  docker build -t payment-razorpay:latest "$REPO_ROOT/services/payment/razorpay"
   docker build -t ticketing-system-mysql:latest "$REPO_ROOT/services/database"
   docker build -t frontend:latest "$REPO_ROOT/frontend/vue"
 }
 
+cleanup_stale_default_resources() {
+  # Remove any old ticketing-system resources left behind in the default namespace.
+  echo "Cleaning stale ticketing-system resources from the default namespace..."
+  kubectl -n default get deployment,service,configmap,secret,pod,replicaset,statefulset -o name 2>/dev/null \
+    | grep -E '(^deployment.apps/ticketing-system-|^service/ticketing-system-|^configmap/ticketing-system-|^secret/ticketing-system-|^pod/ticketing-system-|^replicaset.apps/ticketing-system-|^statefulset.apps/ticketing-system-)' \
+    | xargs -r kubectl -n default delete --ignore-not-found=true >/dev/null 2>&1 || true
+}
+
 apply_manifests() {
   # Apply the core workload and service manifests in a safe order.
+  kubectl create namespace app --dry-run=client -o yaml | kubectl apply -f - >/dev/null
   kubectl apply -f "$K8S_DIR/namespace.yaml"
   kubectl apply -f "$K8S_DIR/secret.yaml"
   kubectl apply -f "$K8S_DIR/configmap.yaml"
@@ -311,6 +383,9 @@ main() {
       ;;
   esac
 
+  normalize_secret_namespace
+  validate_secret_manifest
+
   # Make sure Minikube is running before we build images or apply resources.
   echo "Starting Minikube..."
   minikube start --driver=docker --wait=true --wait-timeout=5m --addons=default-storageclass --addons=metrics-server
@@ -327,6 +402,9 @@ main() {
 
   # Build all service images inside the Minikube Docker environment.
   build_images
+
+  # Remove stale resources from default namespace before applying the app manifests.
+  cleanup_stale_default_resources
 
   # Apply the core Kubernetes resources in the correct order.
   apply_manifests

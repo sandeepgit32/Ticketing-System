@@ -18,7 +18,7 @@ spec:
           image: payment-razorpay:latest
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 9000
+            - containerPort: 8000
           envFrom:
             - configMapRef:
                 name: ticketing-system-config
@@ -40,11 +40,11 @@ spec:
                   key: RAZORPAY_WEBHOOK_SECRET
           readinessProbe:
             tcpSocket:
-              port: 9000
+              port: 8000
             initialDelaySeconds: 3
             periodSeconds: 10
           livenessProbe:
             tcpSocket:
-              port: 9000
+              port: 8000
             initialDelaySeconds: 10
             periodSeconds: 20
